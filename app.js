@@ -316,7 +316,7 @@ function createPeerConnection(role) {
     const state = peerConnection?.connectionState || '';
     if (currentMode === 'viewer') {
       if (!autoSessionActive && !pendingCaptureRequest) captureStatus.textContent = state === 'connected' ? 'Live operator camera connected. Tap Start Session when ready.' : `Operator camera connection: ${state || 'starting'}...`;
-    } else if (currentMode === 'operator' && state) {
+    } else if (currentMode === 'operator' && state && !pendingCaptureRequest) {
       captureStatus.textContent = state === 'connected' ? 'Viewer is watching the operator camera live.' : `Live viewer connection: ${state}...`;
     }
     updateUi();
@@ -385,11 +385,22 @@ function announceOperatorCameraReady(force = false) {
 async function maybeStartOperatorLiveStream(force = false) {
   if (currentMode !== 'operator' || !stream || !cameraReady || !viewerClientId) return;
   const state = peerConnection?.connectionState;
-  const now = Date.now();
+  const iceState = peerConnection?.iceConnectionState;
+
+  // Keep one stable WebRTC connection per viewer. The viewer sends repeated
+  // "viewer-ready" pings while it is waiting for video; the old logic created
+  // a brand-new offer every few seconds, which closed the current peer connection
+  // in createPeerConnection(). During the auto session this could reset the live
+  // connection after Photo 1 and stop the remaining captures from continuing.
   if (!force && liveOfferInProgress) return;
-  if (!force && peerConnection && ['new', 'connecting', 'connected'].includes(state) && now - lastLiveOfferAt < 6000) return;
+  if (!force && peerConnection && ['new', 'connecting', 'connected'].includes(state)) return;
+  if (!force && peerConnection && ['checking', 'connected', 'completed'].includes(iceState)) return;
+
+  // If the previous connection is genuinely broken, replace it.
+  if (peerConnection && ['failed', 'closed', 'disconnected'].includes(state)) closePeerConnection();
+
   liveOfferInProgress = true;
-  lastLiveOfferAt = now;
+  lastLiveOfferAt = Date.now();
   try {
     const pc = createPeerConnection('operator');
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
