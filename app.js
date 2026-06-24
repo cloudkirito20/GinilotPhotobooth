@@ -76,6 +76,8 @@ let lastOperatorOfferFrom = null;
 let lastViewerOfferAt = 0;
 let operatorCaptureBusy = false;
 let viewerSessionStatusLockedUntil = 0;
+let operatorPreviewTimer = null;
+let lastViewerPreviewFrameAt = 0;
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
@@ -356,6 +358,7 @@ startCameraBtn.addEventListener('click', async () => {
       drawCanvas();
       updateUi();
       announceOperatorCameraReady();
+      startOperatorPreviewFrames();
       maybeStartOperatorLiveStream();
     };
     cameraFeed.onloadedmetadata = markReady;
@@ -439,7 +442,7 @@ function requestViewerLiveReconnect(message = 'Connecting to operator camera...'
 
 function announceViewerReady() {
   if (currentMode !== 'viewer') return;
-  sendLiveSignal('viewer-ready', { wantsLivePreview: true });
+  sendLiveSignal('viewer-ready', { wantsLivePreview: true, hasLiveVideo: hasViewerLiveVideo() });
 }
 
 function startViewerReadyLoop() {
@@ -464,6 +467,31 @@ function announceOperatorCameraReady(force = false) {
   if (operatorCameraAnnounced && !force) return;
   operatorCameraAnnounced = true;
   sendLiveSignal('operator-camera-ready', { hasCamera: true });
+}
+
+function sendOperatorPreviewFrame() {
+  if (currentMode !== 'operator' || !cameraReady || !cameraFeed || cameraFeed.readyState < 2 || !cameraFeed.videoWidth) return;
+  try {
+    const previewCanvas = document.createElement('canvas');
+    const maxWidth = 420;
+    const scale = Math.min(1, maxWidth / cameraFeed.videoWidth);
+    previewCanvas.width = Math.max(1, Math.round(cameraFeed.videoWidth * scale));
+    previewCanvas.height = Math.max(1, Math.round(cameraFeed.videoHeight * scale));
+    const previewCtx = previewCanvas.getContext('2d');
+    previewCtx.drawImage(cameraFeed, 0, 0, previewCanvas.width, previewCanvas.height);
+    sendLiveSignal('operator-preview-frame', { imageDataUrl: previewCanvas.toDataURL('image/jpeg', 0.38) });
+  } catch (_) {}
+}
+
+function startOperatorPreviewFrames() {
+  if (currentMode !== 'operator' || operatorPreviewTimer) return;
+  sendOperatorPreviewFrame();
+  operatorPreviewTimer = setInterval(sendOperatorPreviewFrame, 900);
+}
+
+function stopOperatorPreviewFrames() {
+  if (operatorPreviewTimer) clearInterval(operatorPreviewTimer);
+  operatorPreviewTimer = null;
 }
 
 async function maybeStartOperatorLiveStream(force = false) {
@@ -514,11 +542,17 @@ async function handleLiveSignal(eventName, payload) {
     viewerClientId = payload.clientId;
     if (!operatorCaptureBusy) captureStatus.textContent = cameraReady ? 'Viewer connected. Sending live camera preview...' : 'Viewer connected. Start Camera to send live preview.';
     updateUi();
-    if (cameraReady) announceOperatorCameraReady(true);
-    // During an actual capture, do not restart WebRTC. Tablets can treat the preview
-    // renegotiation as a reset and the auto-session stops after Photo 1. Capture sync
-    // is handled by Supabase/BroadcastChannel and must stay independent from preview.
-    if (!operatorCaptureBusy) maybeStartOperatorLiveStream(isNewViewer);
+    if (cameraReady) {
+      announceOperatorCameraReady(true);
+      startOperatorPreviewFrames();
+      // Send a lightweight image preview immediately so the viewer has visible output even
+      // while WebRTC is still negotiating or if the tablet blocks remote video autoplay.
+      sendOperatorPreviewFrame();
+    }
+    // During an actual capture, do not restart WebRTC. Outside capture, force a new offer if
+    // the viewer says it still has no visible video; otherwise a stale connected peer can leave
+    // the viewer with "operator ready" but no camera output.
+    if (!operatorCaptureBusy) maybeStartOperatorLiveStream(isNewViewer || payload.hasLiveVideo === false);
     return;
   }
 
@@ -526,6 +560,19 @@ async function handleLiveSignal(eventName, payload) {
     if (currentMode !== 'viewer') return;
     setStatusWhenIdle('Operator camera is ready. Waiting for live preview...');
     announceViewerReady();
+    return;
+  }
+
+  if (eventName === 'operator-preview-frame') {
+    if (currentMode !== 'viewer' || !payload.imageDataUrl) return;
+    lastViewerPreviewFrameAt = Date.now();
+    if (!hasViewerLiveVideo()) {
+      livePreviewImage.src = payload.imageDataUrl;
+      livePreviewImage.classList.remove('hidden');
+      cameraFeed.classList.add('hidden');
+      setStatusWhenIdle('Operator camera preview connected. Tap Start Session when ready.');
+      updateUi();
+    }
     return;
   }
 
@@ -625,12 +672,16 @@ function captureToTemplate(slotOverride = null, reason = 'photo-captured') {
   img.src = dataUrl;
 }
 
+function hasUsableVideoFrame() {
+  return cameraFeed && !cameraFeed.classList.contains('hidden') && cameraFeed.readyState >= 2 && cameraFeed.videoWidth > 0 && cameraFeed.videoHeight > 0;
+}
+
+function hasUsablePreviewImage() {
+  return livePreviewImage && !livePreviewImage.classList.contains('hidden') && !!livePreviewImage.src && livePreviewImage.naturalWidth > 0 && livePreviewImage.naturalHeight > 0;
+}
+
 function canCaptureFromVisibleVideo() {
-  return !!templateImage
-    && cameraFeed
-    && cameraFeed.readyState >= 2
-    && cameraFeed.videoWidth > 0
-    && cameraFeed.videoHeight > 0;
+  return !!templateImage && (hasUsableVideoFrame() || hasUsablePreviewImage());
 }
 
 function captureVisibleVideoFallback(slotIndex, requestId) {
@@ -660,14 +711,18 @@ function captureViewerFrameToTemplate(slotIndex, reason = 'photo-captured-viewer
     startViewerReadyLoop();
     return false;
   }
+  const useVideo = hasUsableVideoFrame();
+  const source = useVideo ? cameraFeed : livePreviewImage;
+  const sourceWidth = useVideo ? cameraFeed.videoWidth : livePreviewImage.naturalWidth;
+  const sourceHeight = useVideo ? cameraFeed.videoHeight : livePreviewImage.naturalHeight;
   const shotCanvas = document.createElement('canvas');
-  shotCanvas.width = cameraFeed.videoWidth;
-  shotCanvas.height = cameraFeed.videoHeight;
+  shotCanvas.width = sourceWidth;
+  shotCanvas.height = sourceHeight;
   const shotCtx = shotCanvas.getContext('2d');
   shotCtx.translate(shotCanvas.width, 0);
   shotCtx.scale(-1, 1);
-  shotCtx.drawImage(cameraFeed, 0, 0, shotCanvas.width, shotCanvas.height);
-  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.56);
+  shotCtx.drawImage(source, 0, 0, shotCanvas.width, shotCanvas.height);
+  const dataUrl = shotCanvas.toDataURL('image/jpeg', useVideo ? 0.56 : 0.72);
   const img = new Image();
   img.onload = () => {
     capturedPhotos[slotIndex] = img;
@@ -1188,6 +1243,7 @@ function initSupabaseSync() {
       .on('broadcast', { event: 'capture-request' }, event => handleCaptureRequest(event.payload))
       .on('broadcast', { event: 'viewer-ready' }, event => handleLiveSignal('viewer-ready', event.payload))
       .on('broadcast', { event: 'operator-camera-ready' }, event => handleLiveSignal('operator-camera-ready', event.payload))
+      .on('broadcast', { event: 'operator-preview-frame' }, event => handleLiveSignal('operator-preview-frame', event.payload))
       .on('broadcast', { event: 'webrtc-offer' }, event => handleLiveSignal('webrtc-offer', event.payload))
       .on('broadcast', { event: 'webrtc-answer' }, event => handleLiveSignal('webrtc-answer', event.payload))
       .on('broadcast', { event: 'webrtc-ice' }, event => handleLiveSignal('webrtc-ice', event.payload))

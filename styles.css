@@ -260,3 +260,10 @@ body.viewer-mode button { padding: 11px 12px; border-radius: 15px; }
   body.viewer-mode #qrPanel { max-height: 190px; }
   body.viewer-mode canvas { height: 100% !important; max-height: 100%; }
 }
+
+
+/* v25: viewer should see only camera/session before photos are complete; show template preview only after the 3-photo session. */
+body.viewer-mode .preview-area.viewer-final-only { display: none !important; }
+body.viewer-mode .camera-stage video.hidden { display: none !important; }
+body.viewer-mode .live-preview-image { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
+body.viewer-mode .live-preview-image.hidden { display: none !important; }
