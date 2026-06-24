@@ -219,7 +219,7 @@ function updateUi() {
   }
 
   const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
-  const viewerHasLiveOperatorCamera = currentMode === 'viewer' && (cameraReady || !!remoteStream);
+  const viewerHasLiveOperatorCamera = currentMode === 'viewer' && hasViewerLiveVideo();
   const viewerCanRequest = currentMode === 'viewer' && viewerHasLiveOperatorCamera && !(complete && !isRetaking) && !pendingCaptureRequest && !autoSessionActive;
   captureBtn.disabled = currentMode === 'viewer' ? !viewerCanRequest : true;
   captureBtn.textContent = isRetaking ? `Retake Photo ${retakeIndex + 1}` : 'Start Session';
@@ -313,7 +313,7 @@ function createPeerConnection(role) {
   peerConnection.onconnectionstatechange = () => {
     const state = peerConnection?.connectionState || '';
     if (currentMode === 'viewer') {
-      captureStatus.textContent = state === 'connected' ? 'Live operator camera connected. Tap Capture Photo when ready.' : `Operator camera connection: ${state || 'starting'}...`;
+      if (!autoSessionActive && !pendingCaptureRequest) captureStatus.textContent = state === 'connected' ? 'Live operator camera connected. Tap Start Session when ready.' : `Operator camera connection: ${state || 'starting'}...`;
     } else if (currentMode === 'operator' && state) {
       captureStatus.textContent = state === 'connected' ? 'Viewer is watching the operator camera live.' : `Live viewer connection: ${state}...`;
     }
@@ -329,11 +329,26 @@ function createPeerConnection(role) {
     cameraFeed.muted = true;
     cameraFeed.play().catch(() => {});
     cameraReady = true;
-    captureStatus.textContent = 'Live operator camera connected. Tap Start Session when ready.';
+    if (!autoSessionActive && !pendingCaptureRequest) captureStatus.textContent = 'Live operator camera connected. Tap Start Session when ready.';
     if (viewerReadyTimer) { clearInterval(viewerReadyTimer); viewerReadyTimer = null; }
     updateUi();
   };
   return peerConnection;
+}
+
+function hasViewerLiveVideo() {
+  return currentMode === 'viewer'
+    && !!remoteStream
+    && cameraFeed.srcObject === remoteStream
+    && cameraFeed.readyState >= 1;
+}
+
+function requestViewerLiveReconnect(message = 'Connecting to operator camera...') {
+  if (currentMode !== 'viewer') return;
+  captureStatus.textContent = message;
+  announceViewerReady();
+  startViewerReadyLoop();
+  updateUi();
 }
 
 function announceViewerReady() {
@@ -351,9 +366,9 @@ function startViewerReadyLoop() {
       return;
     }
     const state = peerConnection?.connectionState;
-    const hasLiveVideo = !!remoteStream && cameraFeed.srcObject === remoteStream;
+    const hasLiveVideo = hasViewerLiveVideo();
     if (state === 'connected' && hasLiveVideo) return;
-    captureStatus.textContent = 'Connecting to operator camera...';
+    if (!autoSessionActive && !pendingCaptureRequest) captureStatus.textContent = 'Connecting to operator camera...';
     announceViewerReady();
   }, 2000);
 }
@@ -405,7 +420,7 @@ async function handleLiveSignal(eventName, payload) {
 
   if (eventName === 'operator-camera-ready') {
     if (currentMode !== 'viewer') return;
-    captureStatus.textContent = 'Operator camera is ready. Waiting for live preview...';
+    if (!autoSessionActive && !pendingCaptureRequest) captureStatus.textContent = 'Operator camera is ready. Waiting for live preview...';
     announceViewerReady();
     return;
   }
@@ -511,8 +526,12 @@ function getNextCaptureSlotIndex() {
 
 function sendCaptureRequest(slotOverride = null) {
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
-  const viewerHasLiveOperatorCamera = cameraReady || !!remoteStream;
-  if ((complete && retakeIndex === null) || !viewerHasLiveOperatorCamera || pendingCaptureRequest) return null;
+  const viewerHasLiveOperatorCamera = hasViewerLiveVideo();
+  if ((complete && retakeIndex === null) || pendingCaptureRequest) return null;
+  if (!viewerHasLiveOperatorCamera) {
+    requestViewerLiveReconnect('Live preview is not ready yet. Reconnecting to operator camera...');
+    return null;
+  }
   const requestedSlot = Number.isInteger(slotOverride) ? slotOverride : getNextCaptureSlotIndex();
   const request = {
     requestId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
@@ -554,6 +573,10 @@ async function runViewerAutoSession() {
   if (autoSessionActive) return;
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
   if (complete && retakeIndex === null) return;
+  if (!hasViewerLiveVideo()) {
+    requestViewerLiveReconnect('Live preview is not ready yet. Please wait for the operator camera to appear, then tap Start Session again.');
+    return;
+  }
 
   if (retakeIndex !== null) {
     autoSessionActive = true;
@@ -562,7 +585,13 @@ async function runViewerAutoSession() {
     const previous = photoDataUrls[slot] || null;
     captureStatus.textContent = `Retaking Photo ${slot + 1}.`;
     await runCountdown('Retake');
-    sendCaptureRequest(slot);
+    const requestId = sendCaptureRequest(slot);
+    if (!requestId) {
+      autoSessionActive = false;
+      requestViewerLiveReconnect('Retake did not start because the live preview is not ready. Reconnecting to operator camera...');
+      updateUi();
+      return;
+    }
     const ok = await waitForPhoto(slot, previous);
     autoSessionActive = false;
     if (ok) captureStatus.textContent = 'Retake received. Review the final template.';
@@ -582,7 +611,14 @@ async function runViewerAutoSession() {
     const previous = photoDataUrls[slot] || null;
     captureStatus.textContent = `Photo ${slot + 1} of 3: ${prompt}.`;
     await runCountdown(prompt);
-    sendCaptureRequest(slot);
+    const requestId = sendCaptureRequest(slot);
+    if (!requestId) {
+      captureStatus.textContent = 'Capture did not start because the live preview is not ready. Reconnecting to operator camera...';
+      autoSessionActive = false;
+      requestViewerLiveReconnect(captureStatus.textContent);
+      updateUi();
+      return;
+    }
     const ok = await waitForPhoto(slot, previous);
     pendingCaptureRequest = null;
     if (!ok) {
@@ -606,7 +642,7 @@ function handleCaptureRequest(request) {
   if (currentMode !== 'operator') return;
   const slotIndex = Number.isInteger(request.retakeIndex) ? request.retakeIndex : request.slotIndex;
   if (Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3) retakeIndex = slotIndex;
-  captureStatus.textContent = `Viewer requested Photo ${slotIndex + 1}. Capturing from operator camera...`;
+  captureStatus.textContent = `Viewer requested Photo ${(Number.isInteger(slotIndex) ? slotIndex : 0) + 1}. Capturing from operator camera...`;
   performOperatorCapture('remote');
 }
 

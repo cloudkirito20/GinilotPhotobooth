@@ -50,3 +50,8 @@ Recommended order:
 4. Tap Start Session.
 
 If using two separate devices, make sure the Supabase URL and anon key are configured and both devices open the same deployed URL. Local tab sync only works on the same browser/device.
+
+## v12 Start Session reconnect fix
+
+This build prevents the Viewer Start Session button from starting the countdown unless the WebRTC video track is actually attached to the viewer video element. If the operator camera is announced but the viewer video is not fully connected yet, the app now requests a fresh WebRTC offer instead of beginning the session and appearing to reset.
+
