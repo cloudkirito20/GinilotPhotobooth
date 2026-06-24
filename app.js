@@ -459,6 +459,15 @@ async function handleLiveSignal(eventName, payload) {
 }
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function showSessionCue(message, detail = '') {
+  captureBtn.disabled = true;
+  countdownOverlay.classList.remove('hidden');
+  countdownNumber.textContent = message;
+  countdownLabel.textContent = detail;
+  await sleep(1250);
+}
+
 async function runCountdown(message = 'Get ready') {
   captureBtn.disabled = true;
   countdownOverlay.classList.remove('hidden');
@@ -469,7 +478,7 @@ async function runCountdown(message = 'Get ready') {
   }
   countdownNumber.textContent = '📸';
   countdownLabel.textContent = 'Smile!';
-  await sleep(450);
+  await sleep(650);
   countdownOverlay.classList.add('hidden');
 }
 function showFlash() { flashOverlay.classList.remove('hidden'); setTimeout(() => flashOverlay.classList.add('hidden'), 340); }
@@ -607,10 +616,12 @@ async function runViewerAutoSession() {
 
   for (let slot = 0; slot < 3; slot++) {
     if (autoSessionAbort) break;
-    const prompt = slot === 0 ? 'Get ready' : (slot === 1 ? 'Again' : 'Last na');
+    const cue = slot === 0 ? 'Get ready' : (slot === 1 ? 'Again' : 'Last na');
+    const countdownPrompt = `Photo ${slot + 1} of 3`;
     const previous = photoDataUrls[slot] || null;
-    captureStatus.textContent = `Photo ${slot + 1} of 3: ${prompt}.`;
-    await runCountdown(prompt);
+    captureStatus.textContent = `Photo ${slot + 1} of 3: ${cue}.`;
+    await showSessionCue(cue, slot === 0 ? 'Starting session' : 'Next photo');
+    await runCountdown(countdownPrompt);
     const requestId = sendCaptureRequest(slot);
     if (!requestId) {
       captureStatus.textContent = 'Capture did not start because the live preview is not ready. Reconnecting to operator camera...';

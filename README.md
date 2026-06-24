@@ -55,3 +55,14 @@ If using two separate devices, make sure the Supabase URL and anon key are confi
 
 This build prevents the Viewer Start Session button from starting the countdown unless the WebRTC video track is actually attached to the viewer video element. If the operator camera is announced but the viewer video is not fully connected yet, the app now requests a fresh WebRTC offer instead of beginning the session and appearing to reset.
 
+
+
+## v13 auto-session cue timing
+
+The viewer Start Session flow now shows a short cue before every automated capture:
+
+1. Get ready → 3...2...1...Smile → Photo 1
+2. Again → 3...2...1...Smile → Photo 2
+3. Last na → 3...2...1...Smile → Photo 3
+
+After the third photo, the viewer moves to preview/retake/done, then QR download and print.
