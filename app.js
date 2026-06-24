@@ -482,7 +482,7 @@ async function runCountdown(message = 'Get ready') {
   countdownOverlay.classList.add('hidden');
 }
 function showFlash() { flashOverlay.classList.remove('hidden'); setTimeout(() => flashOverlay.classList.add('hidden'), 340); }
-function captureToTemplate() {
+function captureToTemplate(slotOverride = null, reason = 'photo-captured') {
   const sourceWidth = cameraFeed.videoWidth || 1280;
   const sourceHeight = cameraFeed.videoHeight || 720;
   const maxSyncWidth = 480;
@@ -498,16 +498,42 @@ function captureToTemplate() {
   // Keep the payload small enough for Supabase Realtime broadcast. Large camera frames can silently fail to sync.
   const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.42);
   img.onload = () => {
-    const slotIndex = retakeIndex !== null ? retakeIndex : getNextCaptureSlotIndex();
+    const slotIndex = Number.isInteger(slotOverride)
+      ? slotOverride
+      : (retakeIndex !== null ? retakeIndex : getNextCaptureSlotIndex());
     capturedPhotos[slotIndex] = img;
     photoDataUrls[slotIndex] = dataUrl;
     retakeIndex = null;
     viewerDone = false;
+    pendingCaptureRequest = null;
     qrPanel.classList.add('hidden');
     drawCanvas();
-    broadcastState('photo-captured');
+    updateUi();
+    broadcastState(reason);
   };
   img.src = dataUrl;
+}
+
+function canCaptureFromVisibleVideo() {
+  return !!templateImage
+    && cameraFeed
+    && cameraFeed.readyState >= 2
+    && cameraFeed.videoWidth > 0
+    && cameraFeed.videoHeight > 0;
+}
+
+function captureVisibleVideoFallback(slotIndex, requestId) {
+  // Fallback for cases where the viewer can see the live camera but the operator tab/device
+  // does not receive the request. This keeps the photobooth usable and still syncs the
+  // captured photo back to the operator preview.
+  if (currentMode !== 'viewer') return false;
+  if (!pendingCaptureRequest || pendingCaptureRequest !== requestId) return false;
+  if (photoDataUrls[slotIndex]) return true;
+  if (!canCaptureFromVisibleVideo()) return false;
+  captureStatus.textContent = `Photo ${slotIndex + 1} captured from the live preview. Syncing to operator...`;
+  captureToTemplate(slotIndex, 'photo-captured-viewer-fallback');
+  showFlash();
+  return true;
 }
 
 async function performOperatorCapture(source = 'operator') {
@@ -553,6 +579,10 @@ function sendCaptureRequest(slotOverride = null) {
   };
   pendingCaptureRequest = request.requestId;
   captureStatus.textContent = `Capture request sent for Photo ${requestedSlot + 1}. Waiting for operator camera...`;
+  // If the operator tab/device misses the request but this viewer already has a playable
+  // live video feed, capture from the visible video as a backup instead of getting stuck.
+  setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 1500);
+  setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 3500);
   setTimeout(() => {
     if (pendingCaptureRequest === request.requestId) {
       pendingCaptureRequest = null;

@@ -34,3 +34,10 @@ const SUPABASE_PUBLISHABLE_KEY = "YOUR_SUPABASE_ANON_KEY";
 ```
 
 Without Supabase, same-browser/same-computer testing can still use local tab sync, but separate devices need Supabase Realtime.
+
+
+## v15 capture reliability fix
+
+- The viewer can now complete the automated 3-photo session even if the operator tab misses a capture request.
+- If the live camera is visible on the viewer, the app captures from that visible WebRTC video as a fallback and syncs the photo back to the operator preview.
+- The normal operator-camera capture path still runs first. The fallback only activates when no operator photo is received quickly.
