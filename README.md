@@ -1,30 +1,31 @@
-# Snap It Up! Browser Remote Live Preview
+# Snap It Up! Browser WebRTC Live Preview
 
-This version supports browser-based Viewer-to-Operator camera preview and capture.
+This version uses WebRTC for the Viewer live camera preview. The old JPEG snapshot relay has been removed to reduce lag.
 
 ## Workflow
 
-1. Put your Supabase URL and anon key in `app.js`.
-2. Open the app on the operator laptop and choose **Operator**.
-3. Click **Start Camera** and allow camera permission. The laptop webcam or HDMI capture card/DSLR webcam source will be used.
-4. Upload the template on the operator laptop.
-5. Open the same app URL on the tablet and choose **Viewer**.
-6. The viewer should see the operator camera live in real time.
-7. The viewer taps **Capture Photo**. The operator browser captures the current camera frame and syncs the photo into the template.
+1. Add your Supabase URL and anon key in `app.js`.
+2. Deploy or open the same app URL on both devices.
+3. On the operator laptop, choose **Operator**.
+4. Click **Start Camera** and allow camera permission.
+5. Upload the photo template on the operator laptop.
+6. On the tablet or second device, choose **Viewer**.
+7. The viewer connects to the operator camera through WebRTC.
+8. The viewer taps **Capture Photo**.
+9. The operator browser captures from the operator camera and broadcasts the updated template state back to both screens.
 
-## Notes
+## Important setup notes
 
-- This is fully browser-based and uses WebRTC for live video preview.
-- Supabase Realtime is used for signaling and photo/template sync.
-- For DSLR use, connect the DSLR to the operator laptop as a webcam source using HDMI capture card or webcam utility.
-- Browser-only mode captures a frame from the live video feed. True DSLR shutter control still requires a local camera-control app/service.
+- For two separate devices, Supabase Realtime must be configured because it carries the WebRTC offer, answer, ICE candidates, capture requests, and template/photo state.
+- BroadcastChannel/localStorage sync only works reliably between tabs on the same browser/device.
+- WebRTC needs HTTPS in production, except on `localhost` during local testing.
+- A public STUN server is included. Some restrictive networks may require a TURN server.
 
+## v8 WebRTC changes
 
-## v6 Live Preview Fix
-The viewer now receives a low-latency browser-based live preview using compressed live-frame relay through the sync channel. WebRTC is still attempted when available, but the frame relay provides a more reliable browser-only fallback. If Supabase shows CHANNEL_ERROR, confirm the anon key is correct and Realtime is enabled for the project.
-
-
-## v7 changes
-- Operator camera panel now shows Start Camera only. The manual Capture Photo button is hidden in Operator mode.
-- Viewer Capture Photo is enabled after the live operator camera preview connects, even when the template state has not fully mirrored yet.
-- Live preview frame relay is lighter to reduce tablet lag: lower preview resolution, stronger JPEG compression, and a slower send interval.
+- Removed `live-frame` JPEG relay.
+- Removed Base64 live-preview frame sending.
+- Viewer live preview now uses the remote WebRTC video stream.
+- Capture requests still go Viewer → Operator.
+- Captured photos now sync Operator → Viewer after the photo image has fully loaded.
+- Remote photo loading now ignores empty slots instead of creating broken image entries.

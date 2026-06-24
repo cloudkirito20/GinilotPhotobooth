@@ -62,10 +62,6 @@ let remoteStream = null;
 let viewerClientId = null;
 let operatorCameraAnnounced = false;
 let pendingIceCandidates = [];
-let liveFrameTimer = null;
-let lastLiveFrameSentAt = 0;
-let lastLiveFrameReceivedAt = 0;
-const LIVE_FRAME_INTERVAL_MS = 650;
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
@@ -109,8 +105,8 @@ chooseOperatorBtn.addEventListener('click', () => setViewMode('operator'));
 chooseViewerBtn.addEventListener('click', () => {
   setViewMode('viewer');
   captureStatus.textContent = 'Connecting to operator camera...';
-  cameraFeed.classList.add('hidden');
-  livePreviewImage?.classList.remove('hidden');
+  cameraFeed.classList.remove('hidden');
+  livePreviewImage?.classList.add('hidden');
   announceViewerReady();
   setTimeout(announceViewerReady, 1200);
   setTimeout(announceViewerReady, 3000);
@@ -216,7 +212,7 @@ function updateUi() {
     : `Photo ${nextNumber} of 3. Click Capture Photo when ready.`;
 
   const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
-  const viewerHasLiveOperatorCamera = currentMode === 'viewer' && (cameraReady || (Date.now() - lastLiveFrameReceivedAt < 5000) || !!remoteStream);
+  const viewerHasLiveOperatorCamera = currentMode === 'viewer' && (cameraReady || !!remoteStream);
   const viewerCanRequest = currentMode === 'viewer' && viewerHasLiveOperatorCamera && !(complete && !isRetaking) && !pendingCaptureRequest;
   captureBtn.disabled = currentMode === 'viewer' ? !viewerCanRequest : true;
   captureBtn.textContent = 'Capture Photo';
@@ -268,7 +264,6 @@ startCameraBtn.addEventListener('click', async () => {
       updateUi();
       announceOperatorCameraReady();
       maybeStartOperatorLiveStream();
-      startOperatorFrameRelay();
     };
     cameraFeed.onloadedmetadata = markReady;
     cameraFeed.oncanplay = markReady;
@@ -278,59 +273,11 @@ startCameraBtn.addEventListener('click', async () => {
 });
 
 
-function stopOperatorFrameRelay() {
-  if (liveFrameTimer) clearInterval(liveFrameTimer);
-  liveFrameTimer = null;
-}
-
-function captureLivePreviewFrame() {
-  if (!stream || !cameraReady || !cameraFeed.videoWidth || !cameraFeed.videoHeight) return null;
-  const maxWidth = 320;
-  const scale = Math.min(1, maxWidth / cameraFeed.videoWidth);
-  const frameCanvas = document.createElement('canvas');
-  frameCanvas.width = Math.max(1, Math.round(cameraFeed.videoWidth * scale));
-  frameCanvas.height = Math.max(1, Math.round(cameraFeed.videoHeight * scale));
-  const frameCtx = frameCanvas.getContext('2d');
-  frameCtx.imageSmoothingEnabled = true;
-  frameCtx.imageSmoothingQuality = 'medium';
-  frameCtx.drawImage(cameraFeed, 0, 0, frameCanvas.width, frameCanvas.height);
-  return frameCanvas.toDataURL('image/jpeg', 0.28);
-}
-
-function sendOperatorLiveFrame() {
-  if (currentMode !== 'operator' || !cameraReady) return;
-  const now = Date.now();
-  if (now - lastLiveFrameSentAt < LIVE_FRAME_INTERVAL_MS - 50) return;
-  const frame = captureLivePreviewFrame();
-  if (!frame) return;
-  lastLiveFrameSentAt = now;
-  sendLiveSignal('live-frame', { frame });
-}
-
-function startOperatorFrameRelay() {
-  if (currentMode !== 'operator' || !cameraReady) return;
-  stopOperatorFrameRelay();
-  sendOperatorLiveFrame();
-  liveFrameTimer = setInterval(sendOperatorLiveFrame, LIVE_FRAME_INTERVAL_MS);
-}
-
-function showViewerLiveFrame(frame) {
-  if (currentMode !== 'viewer' || !frame || !livePreviewImage) return;
-  lastLiveFrameReceivedAt = Date.now();
-  livePreviewImage.src = frame;
-  livePreviewImage.classList.remove('hidden');
-  cameraFeed.classList.add('hidden');
-  cameraReady = true;
-  if (!pendingCaptureRequest) captureStatus.textContent = 'Live operator camera connected. Tap Capture Photo when ready.';
-  updateUi();
-}
 
 function sendLiveSignal(eventName, payload = {}) {
   const message = { ...payload, clientId: CLIENT_ID, sourceMode: currentMode, timestamp: Date.now() };
   try { syncChannel?.postMessage({ type: 'live-signal', eventName, payload: message }); } catch (_) {}
-  if (eventName !== 'live-frame') {
-    try { localStorage.setItem(`${SYNC_KEY}-live-signal`, JSON.stringify({ eventName, payload: message })); } catch (_) {}
-  }
+  try { localStorage.setItem(`${SYNC_KEY}-live-signal`, JSON.stringify({ eventName, payload: message })); } catch (_) {}
   if (supabaseChannel && supabaseReady) {
     supabaseChannel.send({ type: 'broadcast', event: eventName, payload: message }).catch(() => {});
   }
@@ -342,13 +289,16 @@ function closePeerConnection() {
   }
   peerConnection = null;
   pendingIceCandidates = [];
+  if (currentMode === 'viewer') remoteStream = null;
 }
 
 function createPeerConnection(role) {
   closePeerConnection();
   peerConnection = new RTCPeerConnection(RTC_CONFIG);
   peerConnection.onicecandidate = event => {
-    if (event.candidate) sendLiveSignal('webrtc-ice', { targetClientId: role === 'operator' ? viewerClientId : null, candidate: event.candidate });
+    if (!event.candidate) return;
+    const targetClientId = role === 'operator' ? viewerClientId : null;
+    sendLiveSignal('webrtc-ice', { targetClientId, candidate: event.candidate });
   };
   peerConnection.onconnectionstatechange = () => {
     const state = peerConnection?.connectionState || '';
@@ -404,10 +354,6 @@ async function handleLiveSignal(eventName, payload) {
   if (!payload || payload.clientId === CLIENT_ID) return;
   if (payload.targetClientId && payload.targetClientId !== CLIENT_ID) return;
 
-  if (eventName === 'live-frame') {
-    showViewerLiveFrame(payload.frame);
-    return;
-  }
 
   if (eventName === 'viewer-ready') {
     if (currentMode !== 'operator') return;
@@ -483,14 +429,10 @@ function captureToTemplate() {
   // Keep the payload small enough for Supabase Realtime broadcast. Large camera frames can silently fail to sync.
   const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.58);
   img.onload = () => {
-    if (retakeIndex !== null) {
-      capturedPhotos[retakeIndex] = img;
-      photoDataUrls[retakeIndex] = dataUrl;
-      retakeIndex = null;
-    } else if (capturedPhotos.length < 3) {
-      capturedPhotos.push(img);
-      photoDataUrls.push(dataUrl);
-    }
+    const slotIndex = retakeIndex !== null ? retakeIndex : getNextCaptureSlotIndex();
+    capturedPhotos[slotIndex] = img;
+    photoDataUrls[slotIndex] = dataUrl;
+    retakeIndex = null;
     viewerDone = false;
     qrPanel.classList.add('hidden');
     drawCanvas();
@@ -523,7 +465,7 @@ function getNextCaptureSlotIndex() {
 
 function sendCaptureRequest() {
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
-  const viewerHasLiveOperatorCamera = cameraReady || (Date.now() - lastLiveFrameReceivedAt < 5000) || !!remoteStream;
+  const viewerHasLiveOperatorCamera = cameraReady || !!remoteStream;
   if ((complete && retakeIndex === null) || !viewerHasLiveOperatorCamera || pendingCaptureRequest) return;
   const request = {
     requestId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
@@ -694,14 +636,16 @@ function applyRemoteState(payload) {
   }
   if (Array.isArray(payload.photoDataUrls)) {
     photoDataUrls = payload.photoDataUrls.slice(0, 3);
-    capturedPhotos = photoDataUrls.map(src => {
+    capturedPhotos = [];
+    photoDataUrls.forEach((src, index) => {
+      if (!src) return;
       const img = new Image();
+      capturedPhotos[index] = img;
       imageLoads.push(new Promise(resolve => { img.onload = resolve; img.onerror = resolve; }));
       img.src = src;
-      return img;
     });
   }
-  Promise.all(imageLoads).then(() => { drawCanvas(); updateLiveStatus(payload); });
+  Promise.all(imageLoads).then(() => { drawCanvas(); updateLiveStatus(payload); updateUi(); });
 }
 
 function updateLiveStatus(payload, syncMessage) {
@@ -736,7 +680,6 @@ function initSupabaseSync() {
       .on('broadcast', { event: 'capture-request' }, event => handleCaptureRequest(event.payload))
       .on('broadcast', { event: 'viewer-ready' }, event => handleLiveSignal('viewer-ready', event.payload))
       .on('broadcast', { event: 'operator-camera-ready' }, event => handleLiveSignal('operator-camera-ready', event.payload))
-      .on('broadcast', { event: 'live-frame' }, event => handleLiveSignal('live-frame', event.payload))
       .on('broadcast', { event: 'webrtc-offer' }, event => handleLiveSignal('webrtc-offer', event.payload))
       .on('broadcast', { event: 'webrtc-answer' }, event => handleLiveSignal('webrtc-answer', event.payload))
       .on('broadcast', { event: 'webrtc-ice' }, event => handleLiveSignal('webrtc-ice', event.payload))
@@ -750,7 +693,7 @@ function initSupabaseSync() {
           sendSupabaseState(payload);
         }
         if (supabaseReady && currentMode === 'viewer') announceViewerReady();
-        if (supabaseReady && currentMode === 'operator' && cameraReady) { operatorCameraAnnounced = false; announceOperatorCameraReady(); maybeStartOperatorLiveStream(); startOperatorFrameRelay(); }
+        if (supabaseReady && currentMode === 'operator' && cameraReady) { operatorCameraAnnounced = false; announceOperatorCameraReady(); maybeStartOperatorLiveStream(); }
       });
   } catch (error) {
     updateLiveStatus(null, `Supabase setup failed: ${error.message}`);
