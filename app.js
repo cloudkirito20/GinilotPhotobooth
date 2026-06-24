@@ -71,17 +71,9 @@ let lastLiveOfferAt = 0;
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
-const CLIENT_ID = (() => {
-  try {
-    const existing = sessionStorage.getItem('snap-it-up-client-id');
-    if (existing) return existing;
-    const next = crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
-    sessionStorage.setItem('snap-it-up-client-id', next);
-    return next;
-  } catch (_) {
-    return String(Date.now() + Math.random());
-  }
-})();
+// Unique per tab/load. Do not reuse sessionStorage because duplicated tabs can copy
+// the same id; then operator/viewer messages look like "self" messages and get ignored.
+const CLIENT_ID = crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
 
 const paperSizes = {
   '4x6': { label: '4 x 6 in', width: 1200, height: 1800 },
@@ -416,7 +408,10 @@ async function maybeStartOperatorLiveStream(force = false) {
 }
 
 async function handleLiveSignal(eventName, payload) {
-  if (!payload || payload.clientId === CLIENT_ID) return;
+  if (!payload) return;
+  // Ignore only messages from this same tab/mode. Duplicated browser tabs can share an id
+  // in older builds, but operator and viewer must still be allowed to talk to each other.
+  if (payload.clientId === CLIENT_ID && payload.sourceMode === currentMode) return;
   if (payload.targetClientId && payload.targetClientId !== CLIENT_ID) return;
 
 
@@ -595,8 +590,9 @@ function sendCaptureRequest(slotOverride = null, options = {}) {
   captureStatus.textContent = `Capture request sent for Photo ${requestedSlot + 1}. Waiting for operator camera...`;
   // If the operator tab/device misses the request but this viewer already has a playable
   // live video feed, capture from the visible video as a backup instead of getting stuck.
-  setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 1500);
-  setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 3500);
+  setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 1200);
+  setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 2500);
+  setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 5000);
   setTimeout(() => {
     if (pendingCaptureRequest === request.requestId) {
       pendingCaptureRequest = null;
@@ -707,7 +703,7 @@ async function runViewerAutoSession() {
 }
 
 function handleCaptureRequest(request) {
-  if (!request || request.clientId === CLIENT_ID || request.requestId === lastCaptureRequestId) return;
+  if (!request || (request.clientId === CLIENT_ID && request.sourceMode === currentMode) || request.requestId === lastCaptureRequestId) return;
   lastCaptureRequestId = request.requestId;
   if (currentMode !== 'operator') return;
   const slotIndex = Number.isInteger(request.retakeIndex) ? request.retakeIndex : request.slotIndex;
@@ -835,7 +831,7 @@ async function sendSupabaseState(payload) {
 }
 
 function applyRemoteState(payload) {
-  if (!payload || payload.clientId === CLIENT_ID) return;
+  if (!payload || (payload.clientId === CLIENT_ID && payload.sourceMode === currentMode)) return;
   if (pendingCaptureRequest && (payload.reason === 'photo-captured' || payload.reason === 'photo-captured-viewer-fallback')) {
     pendingCaptureRequest = null;
     captureStatus.textContent = 'Photo received from operator camera.';
