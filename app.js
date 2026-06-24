@@ -1,6 +1,6 @@
 
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
+const SUPABASE_PUBLISHABLE_KEY = "PASTE_YOUR_SUPABASE_ANON_KEY_HERE";
 const PHOTO_STORAGE_BUCKET = "snapitup-photos"; // Create this as a public Supabase Storage bucket for QR downloads.
 
 const canvas = document.getElementById('boothCanvas');
@@ -57,7 +57,9 @@ let supabaseReady = false;
 let pendingSupabasePayload = null;
 let lastSyncError = '';
 let lastCaptureRequestId = null;
+let processedCaptureRequestIds = new Set();
 let pendingCaptureRequest = null;
+let activeCaptureCommand = null;
 let peerConnection = null;
 let remoteStream = null;
 let viewerClientId = null;
@@ -244,6 +246,7 @@ function resetSession() {
   autoSessionAbort = true;
   autoSessionToken++;
   pendingCaptureRequest = null;
+  activeCaptureCommand = null;
   qrPanel.classList.add('hidden');
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = null;
@@ -578,7 +581,11 @@ async function performOperatorCapture(source = 'operator', slotOverride = null) 
   if (source !== 'remote') await runCountdown();
   captureToTemplate(slotOverride);
   showFlash();
-  setTimeout(() => { operatorCaptureBusy = false; maybeStartOperatorLiveStream(false); }, 900);
+  // Do not renegotiate/recreate WebRTC immediately after a capture.
+  // On tablets this post-capture renegotiation can reset the live connection
+  // right before the viewer sends Photo 2, leaving the viewer stuck on
+  // "waiting for operator camera capture". Keep the existing preview as-is.
+  setTimeout(() => { operatorCaptureBusy = false; }, 900);
 }
 
 function getNextCaptureSlotIndex() {
@@ -606,13 +613,16 @@ function sendCaptureRequest(slotOverride = null, options = {}) {
     retakeIndex: retakeIndex
   };
   pendingCaptureRequest = request.requestId;
+  activeCaptureCommand = request;
   captureStatus.textContent = `Capture request sent for Photo ${requestedSlot + 1}. Waiting for operator camera...`;
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 1200);
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 2500);
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 5000);
   const retryTimer = setInterval(() => {
     if (pendingCaptureRequest !== request.requestId) return clearInterval(retryTimer);
+    activeCaptureCommand = request;
     rebroadcastCaptureRequest(request);
+    broadcastState('capture-request-retry');
   }, 1800);
   setTimeout(() => {
     clearInterval(retryTimer);
@@ -626,6 +636,7 @@ function sendCaptureRequest(slotOverride = null, options = {}) {
   }, 22000);
   updateUi();
   rebroadcastCaptureRequest(request);
+  broadcastState('capture-request');
   return request.requestId;
 }
 
@@ -637,6 +648,7 @@ function waitForPhoto(slotIndex, previousSrc, timeoutMs = 24000) {
       const received = !!src && src !== previousSrc;
       if (received) {
         pendingCaptureRequest = null;
+        activeCaptureCommand = null;
         clearInterval(timer);
         resolve(true);
       } else if (Date.now() - start > timeoutMs || autoSessionAbort) {
@@ -655,6 +667,7 @@ async function requestCaptureAndWait(slot, label) {
   captureStatus.textContent = `${label}: waiting for operator camera capture...`;
   const ok = await waitForPhoto(slot, previous);
   pendingCaptureRequest = null;
+  activeCaptureCommand = null;
   return ok;
 }
 
@@ -723,9 +736,13 @@ async function runViewerAutoSession() {
 }
 
 function handleCaptureRequest(request) {
-  if (!request || (request.clientId === CLIENT_ID && request.sourceMode === currentMode) || request.requestId === lastCaptureRequestId) return;
-  lastCaptureRequestId = request.requestId;
+  if (!request || (request.clientId === CLIENT_ID && request.sourceMode === currentMode)) return;
+  if (processedCaptureRequestIds.has(request.requestId)) return;
   if (currentMode !== 'operator') return;
+  processedCaptureRequestIds.add(request.requestId);
+  lastCaptureRequestId = request.requestId;
+  // Keep memory bounded during long booth sessions.
+  if (processedCaptureRequestIds.size > 50) processedCaptureRequestIds = new Set(Array.from(processedCaptureRequestIds).slice(-20));
   const slotIndex = Number.isInteger(request.retakeIndex) ? request.retakeIndex : request.slotIndex;
   if (Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3) retakeIndex = slotIndex;
   captureStatus.textContent = `Viewer requested Photo ${(Number.isInteger(slotIndex) ? slotIndex : 0) + 1}. Capturing from operator camera...`;
@@ -842,7 +859,8 @@ function serializeState(reason = 'state-updated') {
     photoSlots,
     paperSize: paperSize.value,
     orientation: orientation.value,
-    viewerDone
+    viewerDone,
+    captureCommand: currentMode === 'viewer' && pendingCaptureRequest && activeCaptureCommand ? activeCaptureCommand : null
   };
 }
 
@@ -902,8 +920,10 @@ async function sendSupabaseState(payload) {
 
 function applyRemoteState(payload) {
   if (!payload || (payload.clientId === CLIENT_ID && payload.sourceMode === currentMode)) return;
+  if (payload.captureCommand) handleCaptureRequest(payload.captureCommand);
   if (pendingCaptureRequest && (payload.reason === 'photo-captured' || payload.reason === 'photo-captured-viewer-fallback')) {
     pendingCaptureRequest = null;
+    activeCaptureCommand = null;
     captureStatus.textContent = 'Photo received from operator camera.';
   }
   if (payload.paperSize && paperSize.value !== payload.paperSize) paperSize.value = payload.paperSize;
