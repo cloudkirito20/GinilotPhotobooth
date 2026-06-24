@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PhotoBooth Studio - Phase 1</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark">PB</div>
+        <div>
+          <h1>PhotoBooth Studio</h1>
+          <p>Phase 1 Session Capture</p>
+        </div>
+      </div>
+      <nav class="tabs" aria-label="Application menu">
+        <button class="tab active" data-tab="file">File</button>
+        <button class="tab" data-tab="edit">Edit</button>
+        <button class="tab" data-tab="about">About</button>
+      </nav>
+    </header>
+
+    <section class="tab-panel active" id="file-panel">
+      <div class="panel-card compact">
+        <strong>File</strong>
+        <span>Upload template, start camera, capture 3 photos, then print or save.</span>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="edit-panel">
+      <div class="panel-card compact">
+        <strong>Edit</strong>
+        <span>Drag or resize any photo slot directly on the template preview.</span>
+      </div>
+    </section>
+
+    <section class="tab-panel" id="about-panel">
+      <div class="panel-card compact">
+        <strong>About</strong>
+        <span>A browser-based photobooth prototype for template-based 3-photo sessions.</span>
+      </div>
+    </section>
+
+    <main class="workspace">
+      <aside class="sidebar">
+        <section class="panel-card">
+          <h2>Session Setup</h2>
+          <label class="field-label" for="paperSize">Paper size</label>
+          <select id="paperSize">
+            <option value="4x6">4 x 6 in</option>
+            <option value="5x7">5 x 7 in</option>
+            <option value="6x8">6 x 8 in</option>
+            <option value="a4">A4</option>
+          </select>
+
+          <label class="field-label field-spaced" for="orientation">Orientation</label>
+          <select id="orientation">
+            <option value="portrait">Portrait</option>
+            <option value="landscape">Landscape</option>
+          </select>
+
+          <label class="upload-box" for="templateUpload">
+            <input id="templateUpload" type="file" accept="image/*" />
+            <span>Upload picture/template</span>
+            <small>PNG or JPG recommended</small>
+          </label>
+
+          <button id="resetTemplateBtn" class="danger" disabled>Reset Template</button>
+        </section>
+
+        <section class="panel-card">
+          <h2>Camera</h2>
+          <video id="cameraFeed" autoplay playsinline muted></video>
+          <div class="button-row">
+            <button id="startCameraBtn" class="primary">Start Camera</button>
+            <button id="captureBtn" disabled>Capture Photo</button>
+          </div>
+          <p id="captureStatus" class="status">0 of 3 photos captured.</p>
+        </section>
+
+        <section class="panel-card">
+          <h2>Actions</h2>
+          <button id="printBtn" class="success" disabled>Print</button>
+          <button id="saveBtn" disabled>Save PNG</button>
+          <button id="newSessionBtn">Reset Session</button>
+        </section>
+      </aside>
+
+      <section class="preview-area">
+        <div class="preview-header">
+          <div>
+            <h2>Template Preview</h2>
+            <p>Drag a photo slot to move it. Pull the corner handle to resize it.</p>
+          </div>
+          <span id="paperBadge">4 x 6 in</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="boothCanvas" width="1200" height="1800"></canvas>
+          <div id="emptyState" class="empty-state">
+            <h3>Upload a template to begin</h3>
+            <p>The selected template will become the background for every 3-photo session.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
