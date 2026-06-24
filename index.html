@@ -5,18 +5,30 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Snap It Up! Photobooth</title>
   <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
 </head>
 <body>
-  <div class="app-shell">
+  <section id="roleSelect" class="role-select">
+    <div class="role-card">
+      <img class="role-logo" src="snap-it-up-circle-logo.png" alt="Snap It Up! logo" />
+      <span class="eyebrow">Welcome to Snap It Up!</span>
+      <h1><span>Choose</span> Your View</h1>
+      <p>Select Operator for full setup controls or Viewer for guest capture only.</p>
+      <div class="role-buttons">
+        <button id="chooseViewerBtn" class="primary">Viewer</button>
+        <button id="chooseOperatorBtn">Operator</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="appShell" class="app-shell hidden">
     <header class="topbar">
       <div class="brand">
-        <div class="brand-logo-frame">
-          <img class="brand-logo" src="snap-it-up-circle-logo.png" alt="Snap It Up! logo" />
-        </div>
-        <div class="brand-copy">
+        <img class="brand-logo" src="snap-it-up-circle-logo.png" alt="Snap It Up! logo" />
+        <div>
           <span class="eyebrow">Premium Photobooth Studio</span>
           <h1><span>Snap</span> It Up!</h1>
-          <p>Life in Smiles • Session Capture Suite</p>
+          <p>Life in Smiles • 3-Photo Capture Suite</p>
         </div>
       </div>
       <nav class="tabs" aria-label="Application menu">
@@ -26,30 +38,14 @@
       </nav>
     </header>
 
-    <section class="tab-panel active" id="file-panel">
-      <div class="panel-card compact">
-        <strong>File</strong>
-        <span>Upload template, start camera, capture 3 photos, then print or save.</span>
-      </div>
-    </section>
+    <section class="tab-panel active" id="file-panel"><strong>File</strong><span> Upload a template, start the camera, capture 3 photos, then print, save, or generate a QR.</span></section>
+    <section class="tab-panel" id="edit-panel"><strong>Edit</strong><span> Drag or resize each photo slot directly on the template preview.</span></section>
+    <section class="tab-panel" id="about-panel"><strong>About</strong><span> Snap It Up! browser-based photobooth prototype.</span></section>
 
-    <section class="tab-panel" id="edit-panel">
-      <div class="panel-card compact">
-        <strong>Edit</strong>
-        <span>Drag or resize any photo slot directly on the template preview.</span>
-      </div>
-    </section>
-
-    <section class="tab-panel" id="about-panel">
-      <div class="panel-card compact">
-        <strong>About</strong>
-        <span>Snap It Up! browser-based photobooth prototype for template-based 3-photo sessions.</span>
-      </div>
-    </section>
 
     <main class="workspace">
       <aside class="sidebar">
-        <section class="panel-card">
+        <section class="panel-card operator-only">
           <h2>Session Setup</h2>
           <label class="field-label" for="paperSize">Paper size</label>
           <select id="paperSize">
@@ -81,34 +77,71 @@
             <button id="startCameraBtn" class="primary">Start Camera</button>
             <button id="captureBtn" disabled>Capture Photo</button>
           </div>
-          <p id="captureStatus" class="status">0 of 3 photos captured.</p>
+          <p id="captureStatus" class="status">Ready to start.</p>
         </section>
 
-        <section class="panel-card">
-          <h2>Actions</h2>
-          <button id="printBtn" class="success" disabled>Print</button>
-          <button id="saveBtn" disabled>Save PNG</button>
-          <button id="newSessionBtn">Reset Session</button>
+        <section id="finalActionsPanel" class="panel-card hidden">
+          <h2>Final Photo</h2>
+          <div class="retake-grid">
+            <button class="retake-btn" data-retake="0">Retake Photo 1</button>
+            <button class="retake-btn" data-retake="1">Retake Photo 2</button>
+            <button class="retake-btn" data-retake="2">Retake Photo 3</button>
+          </div>
+          <button id="doneBtn" class="viewer-action success">Done</button>
+          <button id="printBtn" class="operator-action success">Print</button>
+          <button id="saveBtn" class="operator-action">Save PNG</button>
+          <button id="generateQrBtn" class="done-action hidden">Generate QR</button>
+          <button id="newSessionBtn" class="danger">Start Over</button>
+        </section>
+
+        <section id="qrPanel" class="panel-card hidden">
+          <h2>Guest Download QR</h2>
+          <div id="qrCode"></div>
+          <a id="downloadLink" class="download-link" download="snap-it-up-photo.png">Download Final Photo</a>
+          <p class="status small">For full cross-device QR downloads, connect this app to cloud storage in Phase 2.</p>
         </section>
       </aside>
 
       <section class="preview-area">
         <div class="preview-header">
           <div>
-            <h2>Template Preview</h2>
-            <p>Drag a photo slot to move it. Pull the corner handle to resize it.</p>
+            <h2 id="mainPreviewTitle">Template Preview</h2>
+            <p id="mainPreviewText">Operator can drag and resize the photo slots. Viewer captures photos automatically into the template.</p>
           </div>
-          <span id="paperBadge">4 x 6 in</span>
+          <span id="paperBadge">4 x 6 in • Portrait</span>
+        </div>
+        <div class="progress-steps">
+          <span id="step1">Photo 1</span>
+          <span id="step2">Photo 2</span>
+          <span id="step3">Photo 3</span>
+          <span id="stepFinal">Final</span>
         </div>
         <div class="canvas-wrap">
           <canvas id="boothCanvas" width="1200" height="1800"></canvas>
           <div id="emptyState" class="empty-state">
             <h3>Upload a template to begin</h3>
-            <p>The selected template will become the background for every 3-photo session.</p>
+            <p>The selected template becomes the background for every 3-photo session.</p>
           </div>
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="countdownOverlay" class="countdown-overlay hidden">
+    <div id="countdownNumber">3</div>
+    <p id="countdownLabel">Get ready</p>
+  </div>
+  <div id="flashOverlay" class="flash-overlay hidden"></div>
+
+  <div id="confirmModal" class="modal hidden">
+    <div class="modal-card">
+      <h2 id="confirmTitle">Retake photo?</h2>
+      <p>This will replace the selected photo in the final template.</p>
+      <div class="button-row">
+        <button id="confirmNoBtn">No</button>
+        <button id="confirmYesBtn" class="success">Yes</button>
+      </div>
+    </div>
   </div>
 
   <div id="printOverlay" class="print-overlay hidden" role="status" aria-live="polite">
