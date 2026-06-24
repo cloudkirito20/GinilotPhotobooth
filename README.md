@@ -1,68 +1,36 @@
-# Snap It Up! Browser WebRTC Live Preview
+# Snap It Up Browser Photobooth - WebRTC v14 Capture Unlock
 
-This version uses WebRTC for the Viewer live camera preview. The old JPEG snapshot relay has been removed to reduce lag.
+This version fixes the Start Session / capture lock issue.
 
-## Workflow
+## What changed in v14
 
-1. Add your Supabase URL and anon key in `app.js`.
-2. Deploy or open the same app URL on both devices.
-3. On the operator laptop, choose **Operator**.
-4. Click **Start Camera** and allow camera permission.
-5. Upload the photo template on the operator laptop.
-6. On the tablet or second device, choose **Viewer**.
-7. The viewer connects to the operator camera through WebRTC.
-8. The viewer taps **Capture Photo**.
-9. The operator browser captures from the operator camera and broadcasts the updated template state back to both screens.
+- The Viewer **Start Session** button no longer depends on the WebRTC live preview being connected.
+- WebRTC is now treated as preview-only.
+- The Operator camera remains the source of truth for all captures.
+- Viewer can start the automated 3-photo session even while live preview is reconnecting.
+- Automated sequence remains:
+  1. Get ready → Photo 1 → 3...2...1...Smile
+  2. Again → Photo 2 → 3...2...1...Smile
+  3. Last na → Photo 3 → 3...2...1...Smile
+  4. Preview → Retake / Done → QR → Print
 
-## Important setup notes
+## Correct workflow
 
-- For two separate devices, Supabase Realtime must be configured because it carries the WebRTC offer, answer, ICE candidates, capture requests, and template/photo state.
-- BroadcastChannel/localStorage sync only works reliably between tabs on the same browser/device.
-- WebRTC needs HTTPS in production, except on `localhost` during local testing.
-- A public STUN server is included. Some restrictive networks may require a TURN server.
+1. Open Operator tab/device.
+2. Upload the template.
+3. Click **Start Camera** on Operator.
+4. Open Viewer tab/device.
+5. Choose **Viewer**.
+6. Click **Start Session** on Viewer.
 
-## v8 WebRTC changes
+If the live preview says it is still connecting, Start Session can still run. The operator device will capture from its own local camera.
 
-- Removed `live-frame` JPEG relay.
-- Removed Base64 live-preview frame sending.
-- Viewer live preview now uses the remote WebRTC video stream.
-- Capture requests still go Viewer → Operator.
-- Captured photos now sync Operator → Viewer after the photo image has fully loaded.
-- Remote photo loading now ignores empty slots instead of creating broken image entries.
+## Important
 
+For live sync across different devices, configure the Supabase anon key in `app.js`:
 
-## v10 Automatic viewer session
+```js
+const SUPABASE_PUBLISHABLE_KEY = "YOUR_SUPABASE_ANON_KEY";
+```
 
-- The Viewer button now starts a full automated 3-photo sequence.
-- Sequence: Start Session -> 3, 2, 1, Smile -> Again -> 3, 2, 1, Smile -> Last na -> 3, 2, 1, Smile.
-- The operator camera remains the source of truth. The viewer only sends capture requests; the operator captures the photos and broadcasts the updated template state back to both screens.
-- Captured photo payloads are resized/compressed more aggressively so Photo 2 and Photo 3 sync more reliably through Supabase Realtime.
-- After all 3 photos are captured, the viewer can retake a selected photo or tap Done. Done automatically generates the QR panel for download, while the operator can print the final template.
-
-## v11 WebRTC reconnect fix
-
-This build retries the viewer-ready signal until the WebRTC video track is actually received. The operator will now resend the camera-ready signal and create a fresh WebRTC offer when a new viewer connects, even if the operator camera was already started before the viewer opened the page.
-
-Recommended order:
-1. Open Operator and click Start Camera.
-2. Open Viewer and choose Viewer.
-3. Wait for “Live operator camera connected.”
-4. Tap Start Session.
-
-If using two separate devices, make sure the Supabase URL and anon key are configured and both devices open the same deployed URL. Local tab sync only works on the same browser/device.
-
-## v12 Start Session reconnect fix
-
-This build prevents the Viewer Start Session button from starting the countdown unless the WebRTC video track is actually attached to the viewer video element. If the operator camera is announced but the viewer video is not fully connected yet, the app now requests a fresh WebRTC offer instead of beginning the session and appearing to reset.
-
-
-
-## v13 auto-session cue timing
-
-The viewer Start Session flow now shows a short cue before every automated capture:
-
-1. Get ready → 3...2...1...Smile → Photo 1
-2. Again → 3...2...1...Smile → Photo 2
-3. Last na → 3...2...1...Smile → Photo 3
-
-After the third photo, the viewer moves to preview/retake/done, then QR download and print.
+Without Supabase, same-browser/same-computer testing can still use local tab sync, but separate devices need Supabase Realtime.

@@ -218,9 +218,9 @@ function updateUi() {
         : `Photo ${nextNumber} of 3. Waiting for viewer session.`);
   }
 
-  const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
-  const viewerHasLiveOperatorCamera = currentMode === 'viewer' && hasViewerLiveVideo();
-  const viewerCanRequest = currentMode === 'viewer' && viewerHasLiveOperatorCamera && !(complete && !isRetaking) && !pendingCaptureRequest && !autoSessionActive;
+  // Viewer Start Session must NOT depend on WebRTC preview readiness.
+  // The operator camera is the source of truth for capture; WebRTC is preview-only.
+  const viewerCanRequest = currentMode === 'viewer' && !(complete && !isRetaking) && !pendingCaptureRequest && !autoSessionActive;
   captureBtn.disabled = currentMode === 'viewer' ? !viewerCanRequest : true;
   captureBtn.textContent = isRetaking ? `Retake Photo ${retakeIndex + 1}` : 'Start Session';
 
@@ -535,11 +535,12 @@ function getNextCaptureSlotIndex() {
 
 function sendCaptureRequest(slotOverride = null) {
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
-  const viewerHasLiveOperatorCamera = hasViewerLiveVideo();
   if ((complete && retakeIndex === null) || pendingCaptureRequest) return null;
-  if (!viewerHasLiveOperatorCamera) {
-    requestViewerLiveReconnect('Live preview is not ready yet. Reconnecting to operator camera...');
-    return null;
+  // Do not block capture just because the WebRTC live preview is not connected.
+  // The request goes to the operator; the operator captures using their local camera.
+  if (currentMode === 'viewer' && !hasViewerLiveVideo()) {
+    announceViewerReady();
+    startViewerReadyLoop();
   }
   const requestedSlot = Number.isInteger(slotOverride) ? slotOverride : getNextCaptureSlotIndex();
   const request = {
@@ -582,9 +583,11 @@ async function runViewerAutoSession() {
   if (autoSessionActive) return;
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
   if (complete && retakeIndex === null) return;
+  // WebRTC preview is helpful but must not block starting the photo session.
   if (!hasViewerLiveVideo()) {
-    requestViewerLiveReconnect('Live preview is not ready yet. Please wait for the operator camera to appear, then tap Start Session again.');
-    return;
+    announceViewerReady();
+    startViewerReadyLoop();
+    captureStatus.textContent = 'Starting session. Live preview is still reconnecting, but capture will use the operator camera.';
   }
 
   if (retakeIndex !== null) {
@@ -597,7 +600,7 @@ async function runViewerAutoSession() {
     const requestId = sendCaptureRequest(slot);
     if (!requestId) {
       autoSessionActive = false;
-      requestViewerLiveReconnect('Retake did not start because the live preview is not ready. Reconnecting to operator camera...');
+      captureStatus.textContent = 'Retake request could not be sent. Please check live sync and try again.';
       updateUi();
       return;
     }
@@ -624,9 +627,8 @@ async function runViewerAutoSession() {
     await runCountdown(countdownPrompt);
     const requestId = sendCaptureRequest(slot);
     if (!requestId) {
-      captureStatus.textContent = 'Capture did not start because the live preview is not ready. Reconnecting to operator camera...';
+      captureStatus.textContent = 'Capture request could not be sent. Please check live sync and try again.';
       autoSessionActive = false;
-      requestViewerLiveReconnect(captureStatus.textContent);
       updateUi();
       return;
     }
