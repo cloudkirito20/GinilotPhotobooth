@@ -96,6 +96,8 @@ let photoSlots = [
 
 let currentMode = null;
 let viewerDone = false;
+let activeSessionId = sessionStorage.getItem('snap-it-up-active-session-id') || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
+const SESSION_CACHE_KEY = 'snap-it-up-active-session-cache';
 
 function setViewMode(mode) {
   currentMode = mode;
@@ -204,6 +206,73 @@ canvas.addEventListener('pointermove', event => {
 canvas.addEventListener('pointerup', event => { dragState = null; try { canvas.releasePointerCapture(event.pointerId); } catch (_) {} broadcastState('photo-slot-updated'); });
 canvas.addEventListener('pointercancel', () => { dragState = null; });
 
+
+function cacheCurrentSession() {
+  try {
+    sessionStorage.setItem('snap-it-up-active-session-id', activeSessionId);
+    sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify({
+      activeSessionId,
+      templateDataUrl,
+      photoDataUrls: photoDataUrls.slice(0, 3),
+      photoSlots,
+      paperSize: paperSize.value,
+      orientation: orientation.value,
+      viewerDone
+    }));
+  } catch (_) {}
+}
+
+function restoreCachedSession() {
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(SESSION_CACHE_KEY) || 'null');
+    if (!cached) return;
+    if (cached.activeSessionId) activeSessionId = cached.activeSessionId;
+    if (cached.templateDataUrl && !templateDataUrl) {
+      templateDataUrl = cached.templateDataUrl;
+      templateImage = new Image();
+      templateImage.onload = drawCanvas;
+      templateImage.src = templateDataUrl;
+    }
+    if (Array.isArray(cached.photoDataUrls)) {
+      photoDataUrls = cached.photoDataUrls.slice(0, 3);
+      capturedPhotos = [];
+      photoDataUrls.forEach((src, index) => {
+        if (!src) return;
+        const img = new Image();
+        capturedPhotos[index] = img;
+        img.onload = drawCanvas;
+        img.src = src;
+      });
+    }
+    if (Array.isArray(cached.photoSlots)) photoSlots = cached.photoSlots;
+    if (cached.paperSize) paperSize.value = cached.paperSize;
+    if (cached.orientation) orientation.value = cached.orientation;
+    viewerDone = !!cached.viewerDone;
+  } catch (_) {}
+}
+
+function mergeIncomingPhotos(incoming, reason = '') {
+  if (!Array.isArray(incoming)) return false;
+  const shouldClear = reason === 'session-reset' || reason === 'template-reset' || reason === 'new-session';
+  const next = shouldClear ? [null, null, null] : photoDataUrls.slice(0, 3);
+  let changed = false;
+  for (let i = 0; i < 3; i++) {
+    const incomingSrc = incoming[i] || null;
+    // Never allow a blank viewer/operator state to delete an already captured photo.
+    // This is the main tablet fix: after Photo 1, a capture-request retry can contain
+    // empty photo slots and previously erased Photo 1 from the template.
+    if (incomingSrc && incomingSrc !== next[i]) {
+      next[i] = incomingSrc;
+      changed = true;
+    } else if (shouldClear && next[i]) {
+      next[i] = null;
+      changed = true;
+    }
+  }
+  photoDataUrls = next;
+  return changed;
+}
+
 function updateUi() {
   const count = capturedPhotos.filter(Boolean).length;
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
@@ -238,6 +307,8 @@ function updateUi() {
   document.getElementById('stepFinal').classList.toggle('done', complete);
 }
 function resetSession() {
+  activeSessionId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
+  try { sessionStorage.removeItem(SESSION_CACHE_KEY); sessionStorage.setItem('snap-it-up-active-session-id', activeSessionId); } catch (_) {}
   capturedPhotos = [];
   photoDataUrls = [];
   retakeIndex = null;
@@ -260,7 +331,7 @@ orientation.addEventListener('change', setPaper);
 templateUpload.addEventListener('change', event => {
   const file = event.target.files[0]; if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => { const img = new Image(); img.onload = () => { templateImage = img; templateDataUrl = e.target.result; resetSession(); broadcastState('template-updated'); }; img.src = e.target.result; };
+  reader.onload = e => { const img = new Image(); img.onload = () => { templateImage = img; templateDataUrl = e.target.result; resetSession(); cacheCurrentSession(); broadcastState('template-updated'); }; img.src = e.target.result; };
   reader.readAsDataURL(file);
 });
 startCameraBtn.addEventListener('click', async () => {
@@ -535,6 +606,7 @@ function captureToTemplate(slotOverride = null, reason = 'photo-captured') {
     viewerDone = false;
     pendingCaptureRequest = null;
     qrPanel.classList.add('hidden');
+    cacheCurrentSession();
     drawCanvas();
     updateUi();
     broadcastState(reason);
@@ -614,7 +686,7 @@ function sendCaptureRequest(slotOverride = null, options = {}) {
   };
   pendingCaptureRequest = request.requestId;
   activeCaptureCommand = request;
-  captureStatus.textContent = `Capture request sent for Photo ${requestedSlot + 1}. Waiting for operator camera...`;
+  captureStatus.textContent = `Photo ${requestedSlot + 1}: capture command sent. Keeping the same session open...`;
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 1200);
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 2500);
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 5000);
@@ -664,7 +736,7 @@ async function requestCaptureAndWait(slot, label) {
   pendingCaptureRequest = null;
   const requestId = sendCaptureRequest(slot, { force: true });
   if (!requestId) return false;
-  captureStatus.textContent = `${label}: waiting for operator camera capture...`;
+  captureStatus.textContent = `${label}: capturing in the same session...`;
   const ok = await waitForPhoto(slot, previous);
   pendingCaptureRequest = null;
   activeCaptureCommand = null;
@@ -851,6 +923,9 @@ resetTemplateBtn.addEventListener('click', resetTemplate);
 function serializeState(reason = 'state-updated') {
   return {
     reason,
+    activeSessionId,
+    sessionStatus: autoSessionActive ? 'capturing' : (viewerDone ? 'done' : 'ready'),
+    currentPhoto: getNextCaptureSlotIndex(),
     timestamp: Date.now(),
     sourceMode: currentMode,
     clientId: CLIENT_ID,
@@ -921,11 +996,23 @@ async function sendSupabaseState(payload) {
 function applyRemoteState(payload) {
   if (!payload || (payload.clientId === CLIENT_ID && payload.sourceMode === currentMode)) return;
   if (payload.captureCommand) handleCaptureRequest(payload.captureCommand);
-  if (pendingCaptureRequest && (payload.reason === 'photo-captured' || payload.reason === 'photo-captured-viewer-fallback')) {
+
+  const reason = payload.reason || 'state-updated';
+  if (reason === 'session-reset' || reason === 'template-reset') {
+    capturedPhotos = [];
+    photoDataUrls = [];
+    viewerDone = false;
     pendingCaptureRequest = null;
     activeCaptureCommand = null;
-    captureStatus.textContent = 'Photo received from operator camera.';
+    if (reason === 'template-reset') { templateImage = null; templateDataUrl = null; }
   }
+
+  if (pendingCaptureRequest && (reason === 'photo-captured' || reason === 'photo-captured-viewer-fallback')) {
+    pendingCaptureRequest = null;
+    activeCaptureCommand = null;
+    captureStatus.textContent = 'Photo received. Continuing the same session.';
+  }
+  if (payload.activeSessionId) activeSessionId = payload.activeSessionId;
   if (payload.paperSize && paperSize.value !== payload.paperSize) paperSize.value = payload.paperSize;
   if (payload.orientation && orientation.value !== payload.orientation) orientation.value = payload.orientation;
   const selected = paperSizes[paperSize.value] || paperSizes['4x6'];
@@ -934,7 +1021,7 @@ function applyRemoteState(payload) {
   canvas.height = isLandscape ? selected.width : selected.height;
   paperBadge.textContent = `${selected.label} • ${isLandscape ? 'Landscape' : 'Portrait'}`;
   if (Array.isArray(payload.photoSlots)) photoSlots = payload.photoSlots;
-  viewerDone = !!payload.viewerDone;
+  if (typeof payload.viewerDone === 'boolean') viewerDone = payload.viewerDone;
   const imageLoads = [];
   if (payload.templateDataUrl && payload.templateDataUrl !== templateDataUrl) {
     templateDataUrl = payload.templateDataUrl;
@@ -942,7 +1029,7 @@ function applyRemoteState(payload) {
     imageLoads.push(new Promise(resolve => { templateImage.onload = resolve; templateImage.onerror = resolve; templateImage.src = templateDataUrl; }));
   }
   if (Array.isArray(payload.photoDataUrls)) {
-    photoDataUrls = payload.photoDataUrls.slice(0, 3);
+    mergeIncomingPhotos(payload.photoDataUrls, reason);
     capturedPhotos = [];
     photoDataUrls.forEach((src, index) => {
       if (!src) return;
@@ -952,6 +1039,7 @@ function applyRemoteState(payload) {
       img.src = src;
     });
   }
+  cacheCurrentSession();
   Promise.all(imageLoads).then(() => { drawCanvas(); updateLiveStatus(payload); updateUi(); });
 }
 
@@ -1046,6 +1134,7 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
     this.moveTo(x + r, y); this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r); this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r); return this;
   };
 }
+restoreCachedSession();
 initSync();
 setPaper();
 updateUi();
