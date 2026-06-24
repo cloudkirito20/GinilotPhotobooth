@@ -1,6 +1,6 @@
 
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "PASTE_YOUR_SUPABASE_ANON_KEY_HERE";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
 const PHOTO_STORAGE_BUCKET = "snapitup-photos"; // Create this as a public Supabase Storage bucket for QR downloads.
 
 const canvas = document.getElementById('boothCanvas');
