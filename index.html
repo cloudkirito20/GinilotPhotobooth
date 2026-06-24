@@ -6,6 +6,7 @@
   <title>Snap It Up! Photobooth</title>
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2" defer></script>
 </head>
 <body>
   <section id="roleSelect" class="role-select">
@@ -78,7 +79,7 @@
           <div id="operatorPhotoStatus" class="live-status-list">
             <span>Waiting for viewer captures...</span>
           </div>
-          <p class="status small">Open this app in another tab/device and choose Viewer. Captures and retakes will update here live when the same browser storage/session is available.</p>
+          <p class="status small">Open this app in another tab/device and choose Viewer. Captures and retakes update here live through Supabase when the URL and anon key are configured. Local tab sync is used as a fallback.</p>
         </section>
 
         <section class="panel-card">

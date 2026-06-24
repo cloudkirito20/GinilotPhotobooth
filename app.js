@@ -1,6 +1,6 @@
 
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "CONFIGURED_IN_BUILD";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
 
 const canvas = document.getElementById('boothCanvas');
 const ctx = canvas.getContext('2d');
@@ -49,7 +49,23 @@ let cameraReady = false;
 let templateDataUrl = null;
 let photoDataUrls = [];
 let syncChannel = null;
+let supabaseClient = null;
+let supabaseChannel = null;
+let supabaseReady = false;
+let pendingSupabasePayload = null;
 const SYNC_KEY = 'snap-it-up-live-session';
+const LIVE_ROOM = 'snap-it-up-live-room';
+const CLIENT_ID = (() => {
+  try {
+    const existing = sessionStorage.getItem('snap-it-up-client-id');
+    if (existing) return existing;
+    const next = crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
+    sessionStorage.setItem('snap-it-up-client-id', next);
+    return next;
+  } catch (_) {
+    return String(Date.now() + Math.random());
+  }
+})();
 
 const paperSizes = {
   '4x6': { label: '4 x 6 in', width: 1200, height: 1800 },
@@ -244,7 +260,7 @@ function captureToTemplate() {
   shotCanvas.height = cameraFeed.videoHeight || 720;
   shotCanvas.getContext('2d').drawImage(cameraFeed, 0, 0, shotCanvas.width, shotCanvas.height);
   const img = new Image();
-  const dataUrl = shotCanvas.toDataURL('image/png');
+  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.78);
   img.onload = () => {
     if (retakeIndex !== null) {
       capturedPhotos[retakeIndex] = img;
@@ -313,6 +329,7 @@ function serializeState(reason = 'state-updated') {
     reason,
     timestamp: Date.now(),
     sourceMode: currentMode,
+    clientId: CLIENT_ID,
     templateDataUrl,
     photoDataUrls: photoDataUrls.slice(0, 3),
     photoSlots,
@@ -327,11 +344,30 @@ function broadcastState(reason) {
   const payload = serializeState(reason);
   try { localStorage.setItem(SYNC_KEY, JSON.stringify(payload)); } catch (_) {}
   try { syncChannel?.postMessage(payload); } catch (_) {}
+  sendSupabaseState(payload);
   updateLiveStatus(payload);
 }
 
+function isSupabaseConfigured() {
+  return /^https:\/\/.+\.supabase\.co$/.test(SUPABASE_URL)
+    && SUPABASE_PUBLISHABLE_KEY
+    && !SUPABASE_PUBLISHABLE_KEY.includes('PASTE_')
+    && SUPABASE_PUBLISHABLE_KEY !== 'CONFIGURED_IN_BUILD';
+}
+
+async function sendSupabaseState(payload) {
+  if (!supabaseChannel) return;
+  if (!supabaseReady) { pendingSupabasePayload = payload; return; }
+  try {
+    const result = await supabaseChannel.send({ type: 'broadcast', event: 'state', payload });
+    if (result !== 'ok') updateLiveStatus(payload, `Supabase send returned: ${result}`);
+  } catch (error) {
+    updateLiveStatus(payload, `Supabase send failed: ${error.message}`);
+  }
+}
+
 function applyRemoteState(payload) {
-  if (!payload || payload.sourceMode === currentMode) return;
+  if (!payload || payload.clientId === CLIENT_ID || payload.sourceMode === currentMode) return;
   if (payload.paperSize && paperSize.value !== payload.paperSize) paperSize.value = payload.paperSize;
   if (payload.orientation && orientation.value !== payload.orientation) orientation.value = payload.orientation;
   const selected = paperSizes[paperSize.value] || paperSizes['4x6'];
@@ -359,17 +395,49 @@ function applyRemoteState(payload) {
   Promise.all(imageLoads).then(() => { drawCanvas(); updateLiveStatus(payload); });
 }
 
-function updateLiveStatus(payload) {
+function updateLiveStatus(payload, syncMessage) {
   const status = document.getElementById('liveSyncStatus');
   const photoStatus = document.getElementById('operatorPhotoStatus');
-  if (status) status.textContent = payload?.reason ? `Live update: ${payload.reason.replaceAll('-', ' ')}` : 'Live sync ready.';
+  if (status) {
+    const syncLabel = supabaseReady ? 'Supabase live sync connected' : (isSupabaseConfigured() ? 'Connecting to Supabase live sync...' : 'Local tab sync only - add anon key in app.js');
+    const reason = payload?.reason ? `Live update: ${payload.reason.replaceAll('-', ' ')}` : 'Live sync ready.';
+    status.textContent = syncMessage ? `${reason} • ${syncMessage}` : `${reason} • ${syncLabel}`;
+  }
   if (photoStatus) {
     const list = (payload?.photoDataUrls || photoDataUrls).map((src, i) => `Photo ${i + 1}: ${src ? 'received' : 'waiting'}`);
     photoStatus.innerHTML = list.length ? list.map(item => `<span>${item}</span>`).join('') : '<span>Waiting for viewer captures...</span>';
   }
 }
 
+function initSupabaseSync() {
+  if (!isSupabaseConfigured()) return;
+  if (!window.supabase?.createClient) {
+    updateLiveStatus(null, 'Supabase library did not load.');
+    return;
+  }
+  try {
+    supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY);
+    supabaseChannel = supabaseClient.channel(LIVE_ROOM, {
+      config: { broadcast: { self: false, ack: true } }
+    });
+    supabaseChannel
+      .on('broadcast', { event: 'state' }, event => applyRemoteState(event.payload))
+      .subscribe(status => {
+        supabaseReady = status === 'SUBSCRIBED';
+        updateLiveStatus(null, supabaseReady ? 'Supabase live sync connected.' : `Supabase status: ${status}`);
+        if (supabaseReady && pendingSupabasePayload) {
+          const payload = pendingSupabasePayload;
+          pendingSupabasePayload = null;
+          sendSupabaseState(payload);
+        }
+      });
+  } catch (error) {
+    updateLiveStatus(null, `Supabase setup failed: ${error.message}`);
+  }
+}
+
 function initSync() {
+  initSupabaseSync();
   if ('BroadcastChannel' in window) {
     syncChannel = new BroadcastChannel('snap-it-up-live-room');
     syncChannel.onmessage = event => applyRemoteState(event.data);
