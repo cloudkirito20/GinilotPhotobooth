@@ -41,6 +41,11 @@ let dragState = null;
 let retakeIndex = null;
 let requestedRetakeIndex = null;
 let objectUrl = null;
+let cameraReady = false;
+let templateDataUrl = null;
+let photoDataUrls = [];
+let syncChannel = null;
+const SYNC_KEY = 'snap-it-up-live-session';
 
 const paperSizes = {
   '4x6': { label: '4 x 6 in', width: 1200, height: 1800 },
@@ -76,6 +81,7 @@ function setPaper() {
   canvas.height = isLandscape ? selected.width : selected.height;
   paperBadge.textContent = `${selected.label} • ${isLandscape ? 'Landscape' : 'Portrait'}`;
   drawCanvas();
+  broadcastState('layout-updated');
 }
 
 function getPhotoSlots() {
@@ -155,7 +161,7 @@ canvas.addEventListener('pointermove', event => {
   if (dragState.mode === 'move') { next.x += dx; next.y += dy; } else { next.w += dx; next.h += dy; }
   saveSlot(dragState.index, next); drawCanvas();
 });
-canvas.addEventListener('pointerup', event => { dragState = null; try { canvas.releasePointerCapture(event.pointerId); } catch (_) {} });
+canvas.addEventListener('pointerup', event => { dragState = null; try { canvas.releasePointerCapture(event.pointerId); } catch (_) {} broadcastState('photo-slot-updated'); });
 canvas.addEventListener('pointercancel', () => { dragState = null; });
 
 function updateUi() {
@@ -167,7 +173,7 @@ function updateUi() {
     ? 'Final template is ready. Choose a photo to retake or tap Done.'
     : `Photo ${nextNumber} of 3. Click Capture Photo when ready.`;
 
-  const videoReady = !!stream && cameraFeed.readyState >= 2 && cameraFeed.videoWidth > 0;
+  const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
   captureBtn.disabled = !videoReady || (!templateImage && currentMode === 'operator') || (complete && !isRetaking);
   if (currentMode === 'viewer') captureBtn.disabled = !videoReady || (complete && !isRetaking);
 
@@ -187,21 +193,23 @@ function updateUi() {
 }
 function resetSession() {
   capturedPhotos = [];
+  photoDataUrls = [];
   retakeIndex = null;
   viewerDone = false;
   qrPanel.classList.add('hidden');
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = null;
   drawCanvas();
+  broadcastState('session-reset');
 }
-function resetTemplate() { templateImage = null; templateUpload.value = ''; resetSession(); }
+function resetTemplate() { templateImage = null; templateDataUrl = null; templateUpload.value = ''; resetSession(); broadcastState('template-reset'); }
 
 paperSize.addEventListener('change', setPaper);
 orientation.addEventListener('change', setPaper);
 templateUpload.addEventListener('change', event => {
   const file = event.target.files[0]; if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => { const img = new Image(); img.onload = () => { templateImage = img; resetSession(); }; img.src = e.target.result; };
+  reader.onload = e => { const img = new Image(); img.onload = () => { templateImage = img; templateDataUrl = e.target.result; resetSession(); broadcastState('template-updated'); }; img.src = e.target.result; };
   reader.readAsDataURL(file);
 });
 startCameraBtn.addEventListener('click', async () => {
@@ -209,10 +217,11 @@ startCameraBtn.addEventListener('click', async () => {
     stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: 'user' }, audio: false });
     cameraFeed.srcObject = stream;
     captureStatus.textContent = 'Camera started. Preparing capture...';
-    const markReady = () => { cameraFeed.play().catch(() => {}); drawCanvas(); updateUi(); };
+    const markReady = () => { cameraReady = true; cameraFeed.play().catch(() => {}); drawCanvas(); updateUi(); };
     cameraFeed.onloadedmetadata = markReady;
     cameraFeed.oncanplay = markReady;
     setTimeout(markReady, 500);
+    setTimeout(markReady, 1200);
   } catch (error) { alert('Camera access failed. Please allow camera permission and connect your external camera.'); }
 });
 
@@ -231,18 +240,22 @@ function captureToTemplate() {
   shotCanvas.height = cameraFeed.videoHeight || 720;
   shotCanvas.getContext('2d').drawImage(cameraFeed, 0, 0, shotCanvas.width, shotCanvas.height);
   const img = new Image();
+  const dataUrl = shotCanvas.toDataURL('image/png');
   img.onload = () => {
     if (retakeIndex !== null) {
       capturedPhotos[retakeIndex] = img;
+      photoDataUrls[retakeIndex] = dataUrl;
       retakeIndex = null;
     } else if (capturedPhotos.length < 3) {
       capturedPhotos.push(img);
+      photoDataUrls.push(dataUrl);
     }
     viewerDone = false;
     qrPanel.classList.add('hidden');
     drawCanvas();
+    broadcastState('photo-captured');
   };
-  img.src = shotCanvas.toDataURL('image/png');
+  img.src = dataUrl;
 }
 captureBtn.addEventListener('click', async () => { await runCountdown(); captureToTemplate(); showFlash(); });
 
@@ -285,9 +298,90 @@ generateQrBtn.addEventListener('click', () => {
     qrPanel.classList.remove('hidden');
   }, 'image/png');
 });
-doneBtn.addEventListener('click', () => { viewerDone = true; generateQrBtn.classList.remove('hidden'); captureStatus.textContent = 'Session done. Generate QR or start over.'; updateUi(); });
+doneBtn.addEventListener('click', () => { viewerDone = true; generateQrBtn.classList.remove('hidden'); captureStatus.textContent = 'Session done. Generate QR or start over.'; updateUi(); broadcastState('viewer-done'); });
 newSessionBtn.addEventListener('click', resetSession);
 resetTemplateBtn.addEventListener('click', resetTemplate);
+
+
+
+function serializeState(reason = 'state-updated') {
+  return {
+    reason,
+    timestamp: Date.now(),
+    sourceMode: currentMode,
+    templateDataUrl,
+    photoDataUrls: photoDataUrls.slice(0, 3),
+    photoSlots,
+    paperSize: paperSize.value,
+    orientation: orientation.value,
+    viewerDone
+  };
+}
+
+function broadcastState(reason) {
+  if (!currentMode) return;
+  const payload = serializeState(reason);
+  try { localStorage.setItem(SYNC_KEY, JSON.stringify(payload)); } catch (_) {}
+  try { syncChannel?.postMessage(payload); } catch (_) {}
+  updateLiveStatus(payload);
+}
+
+function applyRemoteState(payload) {
+  if (!payload || payload.sourceMode === currentMode) return;
+  if (payload.paperSize && paperSize.value !== payload.paperSize) paperSize.value = payload.paperSize;
+  if (payload.orientation && orientation.value !== payload.orientation) orientation.value = payload.orientation;
+  const selected = paperSizes[paperSize.value] || paperSizes['4x6'];
+  const isLandscape = orientation.value === 'landscape';
+  canvas.width = isLandscape ? selected.height : selected.width;
+  canvas.height = isLandscape ? selected.width : selected.height;
+  paperBadge.textContent = `${selected.label} • ${isLandscape ? 'Landscape' : 'Portrait'}`;
+  if (Array.isArray(payload.photoSlots)) photoSlots = payload.photoSlots;
+  viewerDone = !!payload.viewerDone;
+  const imageLoads = [];
+  if (payload.templateDataUrl && payload.templateDataUrl !== templateDataUrl) {
+    templateDataUrl = payload.templateDataUrl;
+    templateImage = new Image();
+    imageLoads.push(new Promise(resolve => { templateImage.onload = resolve; templateImage.onerror = resolve; templateImage.src = templateDataUrl; }));
+  }
+  if (Array.isArray(payload.photoDataUrls)) {
+    photoDataUrls = payload.photoDataUrls.slice(0, 3);
+    capturedPhotos = photoDataUrls.map(src => {
+      const img = new Image();
+      imageLoads.push(new Promise(resolve => { img.onload = resolve; img.onerror = resolve; }));
+      img.src = src;
+      return img;
+    });
+  }
+  Promise.all(imageLoads).then(() => { drawCanvas(); updateLiveStatus(payload); });
+}
+
+function updateLiveStatus(payload) {
+  const status = document.getElementById('liveSyncStatus');
+  const photoStatus = document.getElementById('operatorPhotoStatus');
+  if (status) status.textContent = payload?.reason ? `Live update: ${payload.reason.replaceAll('-', ' ')}` : 'Live sync ready.';
+  if (photoStatus) {
+    const list = (payload?.photoDataUrls || photoDataUrls).map((src, i) => `Photo ${i + 1}: ${src ? 'received' : 'waiting'}`);
+    photoStatus.innerHTML = list.length ? list.map(item => `<span>${item}</span>`).join('') : '<span>Waiting for viewer captures...</span>';
+  }
+}
+
+function initSync() {
+  if ('BroadcastChannel' in window) {
+    syncChannel = new BroadcastChannel('snap-it-up-live-room');
+    syncChannel.onmessage = event => applyRemoteState(event.data);
+  }
+  window.addEventListener('storage', event => {
+    if (event.key === SYNC_KEY && event.newValue) {
+      try { applyRemoteState(JSON.parse(event.newValue)); } catch (_) {}
+    }
+  });
+  try {
+    const existing = JSON.parse(localStorage.getItem(SYNC_KEY) || 'null');
+    if (existing) applyRemoteState(existing);
+  } catch (_) {}
+  updateLiveStatus();
+}
+
 
 document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
@@ -299,5 +393,6 @@ if (!CanvasRenderingContext2D.prototype.roundRect) {
     this.moveTo(x + r, y); this.arcTo(x + w, y, x + w, y + h, r); this.arcTo(x + w, y + h, x, y + h, r); this.arcTo(x, y + h, x, y, r); this.arcTo(x, y, x + w, y, r); return this;
   };
 }
+initSync();
 setPaper();
 updateUi();

@@ -151,3 +151,6 @@ body.viewer-mode #qrPanel { margin-top: 14px; }
   .role-card { padding: 26px 20px; }
   .role-logo { width: 120px; height: 120px; }
 }
+.live-status-list { display: grid; gap: 8px; margin-top: 12px; }
+.live-status-list span { display: block; padding: 10px 12px; border-radius: 14px; border: 1px solid var(--line); background: rgba(15,23,42,.48); color: var(--muted); font-weight: 850; }
+body.viewer-mode #operatorLivePanel { display: none !important; }

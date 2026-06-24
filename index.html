@@ -70,6 +70,17 @@
           <button id="resetTemplateBtn" class="danger" disabled>Reset Template</button>
         </section>
 
+
+
+        <section class="panel-card operator-only" id="operatorLivePanel">
+          <h2>Live Viewer Preview</h2>
+          <p id="liveSyncStatus" class="status">Live sync ready.</p>
+          <div id="operatorPhotoStatus" class="live-status-list">
+            <span>Waiting for viewer captures...</span>
+          </div>
+          <p class="status small">Open this app in another tab/device and choose Viewer. Captures and retakes will update here live when the same browser storage/session is available.</p>
+        </section>
+
         <section class="panel-card">
           <h2>Camera</h2>
           <video id="cameraFeed" autoplay playsinline muted></video>
