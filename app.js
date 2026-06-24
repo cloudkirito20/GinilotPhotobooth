@@ -54,6 +54,8 @@ let supabaseChannel = null;
 let supabaseReady = false;
 let pendingSupabasePayload = null;
 let lastSyncError = '';
+let lastCaptureRequestId = null;
+let pendingCaptureRequest = null;
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
 const CLIENT_ID = (() => {
@@ -93,7 +95,7 @@ function setViewMode(mode) {
   updateUi();
 }
 chooseOperatorBtn.addEventListener('click', () => setViewMode('operator'));
-chooseViewerBtn.addEventListener('click', () => { setViewMode('viewer'); setTimeout(() => startCameraBtn.click(), 100); });
+chooseViewerBtn.addEventListener('click', () => { setViewMode('viewer'); captureStatus.textContent = 'Ready. Tap Capture Photo to trigger the operator camera.'; });
 
 function setPaper() {
   const selected = paperSizes[paperSize.value];
@@ -195,8 +197,10 @@ function updateUi() {
     : `Photo ${nextNumber} of 3. Click Capture Photo when ready.`;
 
   const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
-  captureBtn.disabled = !videoReady || (!templateImage && currentMode === 'operator') || (complete && !isRetaking);
-  if (currentMode === 'viewer') captureBtn.disabled = !videoReady || (complete && !isRetaking);
+  const viewerCanRequest = currentMode === 'viewer' && templateImage && !(complete && !isRetaking) && !pendingCaptureRequest;
+  const operatorCanCapture = currentMode === 'operator' && videoReady && templateImage && !(complete && !isRetaking);
+  captureBtn.disabled = currentMode === 'viewer' ? !viewerCanRequest : !operatorCanCapture;
+  captureBtn.textContent = currentMode === 'viewer' ? 'Capture Photo' : 'Capture Photo';
 
   resetTemplateBtn.disabled = !templateImage;
   finalActionsPanel.classList.toggle('hidden', !complete || isRetaking);
@@ -286,7 +290,73 @@ function captureToTemplate() {
   };
   img.src = dataUrl;
 }
-captureBtn.addEventListener('click', async () => { await runCountdown(); captureToTemplate(); showFlash(); });
+
+async function performOperatorCapture(source = 'operator') {
+  if (!templateImage) {
+    captureStatus.textContent = 'Upload a template before capturing.';
+    return;
+  }
+  const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
+  if (!videoReady) {
+    captureStatus.textContent = source === 'remote' ? 'Viewer requested a capture, but the operator camera is not started.' : 'Start the camera before capturing.';
+    updateLiveStatus(serializeState(source === 'remote' ? 'remote-capture-failed-camera-not-ready' : 'camera-not-ready'));
+    return;
+  }
+  if (source !== 'remote') await runCountdown();
+  captureToTemplate();
+  showFlash();
+}
+
+function getNextCaptureSlotIndex() {
+  if (retakeIndex !== null) return retakeIndex;
+  const next = photoDataUrls.findIndex(src => !src);
+  return next === -1 ? Math.min(capturedPhotos.length, 2) : next;
+}
+
+function sendCaptureRequest() {
+  const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
+  if (!templateImage || (complete && retakeIndex === null)) return;
+  const request = {
+    requestId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
+    timestamp: Date.now(),
+    clientId: CLIENT_ID,
+    sourceMode: currentMode,
+    slotIndex: getNextCaptureSlotIndex(),
+    retakeIndex: retakeIndex
+  };
+  pendingCaptureRequest = request.requestId;
+  captureStatus.textContent = `Capture request sent to operator for Photo ${request.slotIndex + 1}. Waiting for camera...`;
+  setTimeout(() => {
+    if (pendingCaptureRequest === request.requestId) {
+      pendingCaptureRequest = null;
+      captureStatus.textContent = 'No operator photo received yet. Confirm the operator laptop camera is started, then try again.';
+      updateUi();
+    }
+  }, 15000);
+  updateUi();
+  try { localStorage.setItem(`${SYNC_KEY}-capture-request`, JSON.stringify(request)); } catch (_) {}
+  try { syncChannel?.postMessage({ type: 'capture-request', payload: request }); } catch (_) {}
+  sendSupabaseCaptureRequest(request);
+}
+
+function handleCaptureRequest(request) {
+  if (!request || request.clientId === CLIENT_ID || request.requestId === lastCaptureRequestId) return;
+  lastCaptureRequestId = request.requestId;
+  if (currentMode !== 'operator') return;
+  const slotIndex = Number.isInteger(request.retakeIndex) ? request.retakeIndex : request.slotIndex;
+  if (Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3) retakeIndex = slotIndex;
+  captureStatus.textContent = `Viewer requested Photo ${slotIndex + 1}. Capturing from operator camera...`;
+  performOperatorCapture('remote');
+}
+
+captureBtn.addEventListener('click', async () => {
+  if (currentMode === 'viewer') {
+    await runCountdown();
+    sendCaptureRequest();
+  } else {
+    await performOperatorCapture('operator');
+  }
+});
 
 document.querySelectorAll('.retake-btn').forEach(btn => btn.addEventListener('click', () => {
   requestedRetakeIndex = Number(btn.dataset.retake);
@@ -364,6 +434,20 @@ function isSupabaseConfigured() {
     && SUPABASE_PUBLISHABLE_KEY !== 'CONFIGURED_IN_BUILD';
 }
 
+async function sendSupabaseCaptureRequest(request) {
+  if (!supabaseChannel) return;
+  if (!supabaseReady) {
+    captureStatus.textContent = 'Capture request is waiting for Supabase live sync to connect.';
+    return;
+  }
+  try {
+    const result = await supabaseChannel.send({ type: 'broadcast', event: 'capture-request', payload: request });
+    if (result !== 'ok') captureStatus.textContent = `Capture request could not be sent: ${result}`;
+  } catch (error) {
+    captureStatus.textContent = `Capture request failed: ${error.message}`;
+  }
+}
+
 async function sendSupabaseState(payload) {
   if (!supabaseChannel) return;
   if (!supabaseReady) { pendingSupabasePayload = payload; return; }
@@ -382,6 +466,10 @@ async function sendSupabaseState(payload) {
 
 function applyRemoteState(payload) {
   if (!payload || payload.clientId === CLIENT_ID) return;
+  if (pendingCaptureRequest && payload.reason === 'photo-captured') {
+    pendingCaptureRequest = null;
+    captureStatus.textContent = 'Photo received from operator camera.';
+  }
   if (payload.paperSize && paperSize.value !== payload.paperSize) paperSize.value = payload.paperSize;
   if (payload.orientation && orientation.value !== payload.orientation) orientation.value = payload.orientation;
   const selected = paperSizes[paperSize.value] || paperSizes['4x6'];
@@ -438,6 +526,7 @@ function initSupabaseSync() {
     });
     supabaseChannel
       .on('broadcast', { event: 'state' }, event => applyRemoteState(event.payload))
+      .on('broadcast', { event: 'capture-request' }, event => handleCaptureRequest(event.payload))
       .subscribe(status => {
         supabaseReady = status === 'SUBSCRIBED';
         updateLiveStatus(null, supabaseReady ? 'Supabase live sync connected.' : `Supabase status: ${status}`);
@@ -456,11 +545,17 @@ function initSync() {
   initSupabaseSync();
   if ('BroadcastChannel' in window) {
     syncChannel = new BroadcastChannel('snap-it-up-live-room');
-    syncChannel.onmessage = event => applyRemoteState(event.data);
+    syncChannel.onmessage = event => {
+      if (event.data?.type === 'capture-request') handleCaptureRequest(event.data.payload);
+      else applyRemoteState(event.data);
+    };
   }
   window.addEventListener('storage', event => {
     if (event.key === SYNC_KEY && event.newValue) {
       try { applyRemoteState(JSON.parse(event.newValue)); } catch (_) {}
+    }
+    if (event.key === `${SYNC_KEY}-capture-request` && event.newValue) {
+      try { handleCaptureRequest(JSON.parse(event.newValue)); } catch (_) {}
     }
   });
   try {

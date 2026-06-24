@@ -31,3 +31,17 @@ http://localhost:8000
 ```
 
 For deployed use, host the folder on Cloudflare Pages.
+
+
+## Phase 2 Browser-Based Remote Capture
+
+This build supports a browser-only DSLR/capture-card workflow:
+
+1. Connect the DSLR to the operator laptop through HDMI capture card or any camera source that appears in Chrome.
+2. Open the app on the operator laptop and choose **Operator**.
+3. Upload/select the template, then click **Start Camera** and allow browser camera permissions.
+4. Open the same deployed app on the tablet and choose **Viewer**.
+5. When the viewer taps **Capture Photo**, the tablet sends a Supabase Realtime capture request to the operator browser.
+6. The operator browser grabs the current frame from the connected camera feed and syncs the photo back to Viewer and Operator.
+
+Note: Browser-only mode captures a frame from the video/capture-card feed. True DSLR shutter control still requires a local desktop helper app or camera SDK.
