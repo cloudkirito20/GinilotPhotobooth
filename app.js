@@ -1,6 +1,7 @@
 
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
+const PHOTO_STORAGE_BUCKET = "snapitup-photos"; // Create this as a public Supabase Storage bucket for QR downloads.
 
 const canvas = document.getElementById('boothCanvas');
 const ctx = canvas.getContext('2d');
@@ -68,6 +69,9 @@ let autoSessionToken = 0;
 let viewerReadyTimer = null;
 let liveOfferInProgress = false;
 let lastLiveOfferAt = 0;
+let lastOperatorOfferFrom = null;
+let lastViewerOfferAt = 0;
+let operatorCaptureBusy = false;
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
@@ -306,6 +310,9 @@ function createPeerConnection(role) {
   };
   peerConnection.onconnectionstatechange = () => {
     const state = peerConnection?.connectionState || '';
+    if (currentMode === 'viewer' && ['failed', 'closed'].includes(state)) {
+      requestViewerLiveReconnect('Live preview reconnecting. Capture session will continue using operator sync...');
+    }
     if (currentMode === 'viewer') {
       if (!autoSessionActive && !pendingCaptureRequest) captureStatus.textContent = state === 'connected' ? 'Live operator camera connected. Tap Start Session when ready.' : `Operator camera connection: ${state || 'starting'}...`;
     } else if (currentMode === 'operator' && state && !pendingCaptureRequest) {
@@ -384,6 +391,7 @@ async function maybeStartOperatorLiveStream(force = false) {
   // a brand-new offer every few seconds, which closed the current peer connection
   // in createPeerConnection(). During the auto session this could reset the live
   // connection after Photo 1 and stop the remaining captures from continuing.
+  if (operatorCaptureBusy && !force) return;
   if (!force && liveOfferInProgress) return;
   if (!force && peerConnection && ['new', 'connecting', 'connected'].includes(state)) return;
   if (!force && peerConnection && ['checking', 'connected', 'completed'].includes(iceState)) return;
@@ -419,10 +427,13 @@ async function handleLiveSignal(eventName, payload) {
     if (currentMode !== 'operator') return;
     const isNewViewer = viewerClientId !== payload.clientId;
     viewerClientId = payload.clientId;
-    captureStatus.textContent = cameraReady ? 'Viewer connected. Sending live camera preview...' : 'Viewer connected. Start Camera to send live preview.';
+    if (!operatorCaptureBusy) captureStatus.textContent = cameraReady ? 'Viewer connected. Sending live camera preview...' : 'Viewer connected. Start Camera to send live preview.';
     updateUi();
     if (cameraReady) announceOperatorCameraReady(true);
-    maybeStartOperatorLiveStream(isNewViewer);
+    // During an actual capture, do not restart WebRTC. Tablets can treat the preview
+    // renegotiation as a reset and the auto-session stops after Photo 1. Capture sync
+    // is handled by Supabase/BroadcastChannel and must stay independent from preview.
+    if (!operatorCaptureBusy) maybeStartOperatorLiveStream(isNewViewer);
     return;
   }
 
@@ -435,6 +446,12 @@ async function handleLiveSignal(eventName, payload) {
 
   if (eventName === 'webrtc-offer') {
     if (currentMode !== 'viewer' || !payload.description) return;
+    const existingState = peerConnection?.connectionState;
+    const offerKey = `${payload.clientId || 'operator'}-${payload.timestamp || 0}`;
+    if ((autoSessionActive || pendingCaptureRequest) && peerConnection && ['new', 'connecting', 'connected'].includes(existingState)) return;
+    if (lastOperatorOfferFrom === offerKey && Date.now() - lastViewerOfferAt < 5000) return;
+    lastOperatorOfferFrom = offerKey;
+    lastViewerOfferAt = Date.now();
     try {
       const pc = createPeerConnection('viewer');
       await pc.setRemoteDescription(new RTCSessionDescription(payload.description));
@@ -504,7 +521,7 @@ function captureToTemplate(slotOverride = null, reason = 'photo-captured') {
   shotCtx.drawImage(cameraFeed, 0, 0, sourceWidth, sourceHeight, 0, 0, shotCanvas.width, shotCanvas.height);
   const img = new Image();
   // Keep the payload small enough for Supabase Realtime broadcast. Large camera frames can silently fail to sync.
-  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.42);
+  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.32);
   img.onload = () => {
     const slotIndex = Number.isInteger(slotOverride)
       ? slotOverride
@@ -545,19 +562,23 @@ function captureVisibleVideoFallback(slotIndex, requestId) {
 }
 
 async function performOperatorCapture(source = 'operator', slotOverride = null) {
+  operatorCaptureBusy = true;
   if (!templateImage) {
     captureStatus.textContent = 'Upload a template before capturing.';
+    operatorCaptureBusy = false;
     return;
   }
   const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
   if (!videoReady) {
     captureStatus.textContent = source === 'remote' ? 'Viewer requested a capture, but the operator camera is not started.' : 'Start the camera before capturing.';
     updateLiveStatus(serializeState(source === 'remote' ? 'remote-capture-failed-camera-not-ready' : 'camera-not-ready'));
+    operatorCaptureBusy = false;
     return;
   }
   if (source !== 'remote') await runCountdown();
   captureToTemplate(slotOverride);
   showFlash();
+  setTimeout(() => { operatorCaptureBusy = false; maybeStartOperatorLiveStream(false); }, 900);
 }
 
 function getNextCaptureSlotIndex() {
@@ -571,8 +592,6 @@ function sendCaptureRequest(slotOverride = null, options = {}) {
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
   if ((complete && retakeIndex === null) || (pendingCaptureRequest && !options.force)) return null;
   if (options.force) pendingCaptureRequest = null;
-  // Do not block capture just because the WebRTC live preview is not connected.
-  // The request goes to the operator; the operator captures using their local camera.
   if (currentMode === 'viewer' && !hasViewerLiveVideo()) {
     announceViewerReady();
     startViewerReadyLoop();
@@ -588,12 +607,15 @@ function sendCaptureRequest(slotOverride = null, options = {}) {
   };
   pendingCaptureRequest = request.requestId;
   captureStatus.textContent = `Capture request sent for Photo ${requestedSlot + 1}. Waiting for operator camera...`;
-  // If the operator tab/device misses the request but this viewer already has a playable
-  // live video feed, capture from the visible video as a backup instead of getting stuck.
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 1200);
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 2500);
   setTimeout(() => captureVisibleVideoFallback(requestedSlot, request.requestId), 5000);
+  const retryTimer = setInterval(() => {
+    if (pendingCaptureRequest !== request.requestId) return clearInterval(retryTimer);
+    rebroadcastCaptureRequest(request);
+  }, 1800);
   setTimeout(() => {
+    clearInterval(retryTimer);
     if (pendingCaptureRequest === request.requestId) {
       pendingCaptureRequest = null;
       if (!autoSessionActive) {
@@ -601,11 +623,9 @@ function sendCaptureRequest(slotOverride = null, options = {}) {
       }
       updateUi();
     }
-  }, 18000);
+  }, 22000);
   updateUi();
-  try { localStorage.setItem(`${SYNC_KEY}-capture-request`, JSON.stringify(request)); } catch (_) {}
-  try { syncChannel?.postMessage({ type: 'capture-request', payload: request }); } catch (_) {}
-  sendSupabaseCaptureRequest(request);
+  rebroadcastCaptureRequest(request);
   return request.requestId;
 }
 
@@ -743,16 +763,58 @@ function saveFinal() {
   link.click();
 }
 saveBtn.addEventListener('click', saveFinal);
+function showQrMessage(message) {
+  qrCode.innerHTML = '';
+  const note = document.createElement('p');
+  note.className = 'status small';
+  note.textContent = message;
+  qrCode.appendChild(note);
+  qrPanel.classList.remove('hidden');
+}
+
+function makeQr(text) {
+  qrCode.innerHTML = '';
+  if (window.QRCode) {
+    new QRCode(qrCode, { text, width: 196, height: 196, correctLevel: QRCode.CorrectLevel.M });
+  } else {
+    qrCode.textContent = 'QR library did not load. Use the download button below.';
+  }
+}
+
+async function uploadFinalPhotoForQr(blob) {
+  if (!isSupabaseConfigured() || !supabaseClient?.storage) return null;
+  const fileName = `sessions/snap-it-up-${Date.now()}-${CLIENT_ID}.png`;
+  const { error } = await supabaseClient.storage
+    .from(PHOTO_STORAGE_BUCKET)
+    .upload(fileName, blob, { contentType: 'image/png', upsert: true });
+  if (error) throw error;
+  const { data } = supabaseClient.storage.from(PHOTO_STORAGE_BUCKET).getPublicUrl(fileName);
+  return data?.publicUrl || null;
+}
+
 function generateFinalQr() {
-  canvas.toBlob(blob => {
-    if (!blob) return;
+  qrPanel.classList.remove('hidden');
+  showQrMessage('Preparing final photo QR...');
+  canvas.toBlob(async blob => {
+    if (!blob) return showQrMessage('Could not prepare the final photo. Please try Save PNG.');
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = URL.createObjectURL(blob);
     downloadLink.href = objectUrl;
-    qrCode.innerHTML = '';
-    if (window.QRCode) new QRCode(qrCode, { text: objectUrl, width: 196, height: 196 });
-    else qrCode.textContent = 'QR library did not load. Use the download button below.';
-    qrPanel.classList.remove('hidden');
+
+    try {
+      const publicUrl = await uploadFinalPhotoForQr(blob);
+      if (publicUrl && /^https?:\/\//.test(publicUrl)) {
+        downloadLink.href = publicUrl;
+        makeQr(publicUrl);
+        captureStatus.textContent = 'QR ready. Scan it to download the final photo.';
+        return;
+      }
+      showQrMessage('QR download needs a public cloud photo link. Local blob links cannot be scanned by phones. Use Save PNG, or configure the public Supabase Storage bucket named snapitup-photos.');
+      captureStatus.textContent = 'Final photo is ready. QR needs public storage before it can be scanned on another device.';
+    } catch (error) {
+      showQrMessage(`QR upload failed: ${error.message}. Check that the Supabase Storage bucket snapitup-photos exists and is public.`);
+      captureStatus.textContent = 'Final photo is ready, but QR upload failed. Use Save PNG or check storage settings.';
+    }
   }, 'image/png');
 }
 generateQrBtn.addEventListener('click', generateFinalQr);
@@ -812,6 +874,14 @@ async function sendSupabaseCaptureRequest(request) {
   } catch (error) {
     captureStatus.textContent = `Capture request failed: ${error.message}`;
   }
+}
+
+
+function rebroadcastCaptureRequest(request) {
+  if (!request) return;
+  try { localStorage.setItem(`${SYNC_KEY}-capture-request`, JSON.stringify({ ...request, retryAt: Date.now() })); } catch (_) {}
+  try { syncChannel?.postMessage({ type: 'capture-request', payload: { ...request, retryAt: Date.now() } }); } catch (_) {}
+  sendSupabaseCaptureRequest({ ...request, retryAt: Date.now() });
 }
 
 async function sendSupabaseState(payload) {
