@@ -1,6 +1,6 @@
 
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
 
 const canvas = document.getElementById('boothCanvas');
 const ctx = canvas.getContext('2d');
@@ -53,6 +53,7 @@ let supabaseClient = null;
 let supabaseChannel = null;
 let supabaseReady = false;
 let pendingSupabasePayload = null;
+let lastSyncError = '';
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
 const CLIENT_ID = (() => {
@@ -396,12 +397,14 @@ function applyRemoteState(payload) {
 }
 
 function updateLiveStatus(payload, syncMessage) {
+  if (syncMessage && !syncMessage.includes('connected')) lastSyncError = syncMessage;
+  if (syncMessage && syncMessage.includes('connected')) lastSyncError = '';
   const status = document.getElementById('liveSyncStatus');
   const photoStatus = document.getElementById('operatorPhotoStatus');
   if (status) {
-    const syncLabel = supabaseReady ? 'Supabase live sync connected' : (isSupabaseConfigured() ? 'Connecting to Supabase live sync...' : 'Local tab sync only - add anon key in app.js');
+    const syncLabel = supabaseReady ? 'Supabase live sync connected' : (lastSyncError || (isSupabaseConfigured() ? 'Connecting to Supabase live sync...' : 'Local tab sync only - add anon key in app.js'));
     const reason = payload?.reason ? `Live update: ${payload.reason.replaceAll('-', ' ')}` : 'Live sync ready.';
-    status.textContent = syncMessage ? `${reason} • ${syncMessage}` : `${reason} • ${syncLabel}`;
+    status.textContent = `${reason} • ${syncLabel}`;
   }
   if (photoStatus) {
     const list = (payload?.photoDataUrls || photoDataUrls).map((src, i) => `Photo ${i + 1}: ${src ? 'received' : 'waiting'}`);
