@@ -56,7 +56,10 @@ select { width: 100%; }
 .upload-box input { display: none; }
 .upload-box span { font-weight: 900; }
 .upload-box small { margin-top: 6px; color: var(--muted); }
-video { width: 100%; aspect-ratio: 4/3; background: #020617; border-radius: 20px; object-fit: cover; border: 1px solid var(--line); }
+.camera-stage { position: relative; width: 100%; aspect-ratio: 4/3; background: #020617; border-radius: 20px; overflow: hidden; border: 1px solid var(--line); }
+video { width: 100%; height: 100%; background: #020617; object-fit: cover; display: block; }
+.live-preview-image { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; display: block; background: #020617; }
+.live-preview-image.hidden { display: none; }
 .button-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
 .status { margin-top: 10px; font-size: 14px; }
 .small { font-size: 12px; }
@@ -135,7 +138,7 @@ body.viewer-mode .workspace { display: block; margin-top: 0; }
 body.viewer-mode .sidebar { gap: 14px; }
 body.viewer-mode .sidebar .panel-card:not(:has(#cameraFeed)):not(#finalActionsPanel):not(#qrPanel) { display: none !important; }
 body.viewer-mode .panel-card { border-radius: 30px; padding: 24px; }
-body.viewer-mode video { aspect-ratio: 4/3; border-radius: 24px; }
+body.viewer-mode .camera-stage { aspect-ratio: 4/3; border-radius: 24px; }
 body.viewer-mode .button-row { grid-template-columns: 1fr; }
 body.viewer-mode #startCameraBtn { display: none; }
 body.viewer-mode .preview-area.viewer-final-only { display: none; }

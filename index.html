@@ -83,7 +83,10 @@
 
         <section class="panel-card">
           <h2>Camera</h2>
-          <video id="cameraFeed" autoplay playsinline muted></video>
+          <div class="camera-stage">
+            <video id="cameraFeed" autoplay playsinline muted></video>
+            <img id="livePreviewImage" class="live-preview-image hidden" alt="Live operator camera preview" />
+          </div>
           <div class="button-row">
             <button id="startCameraBtn" class="primary">Start Camera</button>
             <button id="captureBtn" disabled>Capture Photo</button>

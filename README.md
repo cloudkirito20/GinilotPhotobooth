@@ -18,3 +18,7 @@ This version supports browser-based Viewer-to-Operator camera preview and captur
 - Supabase Realtime is used for signaling and photo/template sync.
 - For DSLR use, connect the DSLR to the operator laptop as a webcam source using HDMI capture card or webcam utility.
 - Browser-only mode captures a frame from the live video feed. True DSLR shutter control still requires a local camera-control app/service.
+
+
+## v6 Live Preview Fix
+The viewer now receives a low-latency browser-based live preview using compressed live-frame relay through the sync channel. WebRTC is still attempted when available, but the frame relay provides a more reliable browser-only fallback. If Supabase shows CHANNEL_ERROR, confirm the anon key is correct and Realtime is enabled for the project.
