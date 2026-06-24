@@ -1,6 +1,6 @@
 
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
 
 const canvas = document.getElementById('boothCanvas');
 const ctx = canvas.getContext('2d');
@@ -56,6 +56,12 @@ let pendingSupabasePayload = null;
 let lastSyncError = '';
 let lastCaptureRequestId = null;
 let pendingCaptureRequest = null;
+let peerConnection = null;
+let remoteStream = null;
+let viewerClientId = null;
+let operatorCameraAnnounced = false;
+let pendingIceCandidates = [];
+const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
 const CLIENT_ID = (() => {
@@ -95,7 +101,13 @@ function setViewMode(mode) {
   updateUi();
 }
 chooseOperatorBtn.addEventListener('click', () => setViewMode('operator'));
-chooseViewerBtn.addEventListener('click', () => { setViewMode('viewer'); captureStatus.textContent = 'Ready. Tap Capture Photo to trigger the operator camera.'; });
+chooseViewerBtn.addEventListener('click', () => {
+  setViewMode('viewer');
+  captureStatus.textContent = 'Connecting to operator camera...';
+  announceViewerReady();
+  setTimeout(announceViewerReady, 1200);
+  setTimeout(announceViewerReady, 3000);
+});
 
 function setPaper() {
   const selected = paperSizes[paperSize.value];
@@ -242,13 +254,145 @@ startCameraBtn.addEventListener('click', async () => {
     stream = await navigator.mediaDevices.getUserMedia({ video: { width: { ideal: 1920 }, height: { ideal: 1080 }, facingMode: 'user' }, audio: false });
     cameraFeed.srcObject = stream;
     captureStatus.textContent = 'Camera started. Preparing capture...';
-    const markReady = () => { cameraReady = true; cameraFeed.play().catch(() => {}); drawCanvas(); updateUi(); };
+    const markReady = () => {
+      cameraReady = true;
+      cameraFeed.play().catch(() => {});
+      drawCanvas();
+      updateUi();
+      announceOperatorCameraReady();
+      maybeStartOperatorLiveStream();
+    };
     cameraFeed.onloadedmetadata = markReady;
     cameraFeed.oncanplay = markReady;
     setTimeout(markReady, 500);
     setTimeout(markReady, 1200);
   } catch (error) { alert('Camera access failed. Please allow camera permission and connect your external camera.'); }
 });
+
+
+function sendLiveSignal(eventName, payload = {}) {
+  const message = { ...payload, clientId: CLIENT_ID, sourceMode: currentMode, timestamp: Date.now() };
+  try { syncChannel?.postMessage({ type: 'live-signal', eventName, payload: message }); } catch (_) {}
+  try { localStorage.setItem(`${SYNC_KEY}-live-signal`, JSON.stringify({ eventName, payload: message })); } catch (_) {}
+  if (supabaseChannel && supabaseReady) {
+    supabaseChannel.send({ type: 'broadcast', event: eventName, payload: message }).catch(() => {});
+  }
+}
+
+function closePeerConnection() {
+  if (peerConnection) {
+    try { peerConnection.ontrack = null; peerConnection.onicecandidate = null; peerConnection.close(); } catch (_) {}
+  }
+  peerConnection = null;
+  pendingIceCandidates = [];
+}
+
+function createPeerConnection(role) {
+  closePeerConnection();
+  peerConnection = new RTCPeerConnection(RTC_CONFIG);
+  peerConnection.onicecandidate = event => {
+    if (event.candidate) sendLiveSignal('webrtc-ice', { targetClientId: role === 'operator' ? viewerClientId : null, candidate: event.candidate });
+  };
+  peerConnection.onconnectionstatechange = () => {
+    const state = peerConnection?.connectionState || '';
+    if (currentMode === 'viewer') {
+      captureStatus.textContent = state === 'connected' ? 'Live operator camera connected. Tap Capture Photo when ready.' : `Operator camera connection: ${state || 'starting'}...`;
+    } else if (currentMode === 'operator' && state) {
+      captureStatus.textContent = state === 'connected' ? 'Viewer is watching the operator camera live.' : `Live viewer connection: ${state}...`;
+    }
+    updateUi();
+  };
+  peerConnection.ontrack = event => {
+    if (currentMode !== 'viewer') return;
+    remoteStream = event.streams[0] || remoteStream || new MediaStream();
+    if (!event.streams[0] && event.track) remoteStream.addTrack(event.track);
+    cameraFeed.srcObject = remoteStream;
+    cameraFeed.muted = true;
+    cameraFeed.play().catch(() => {});
+    cameraReady = true;
+    captureStatus.textContent = 'Live operator camera connected. Tap Capture Photo when ready.';
+    updateUi();
+  };
+  return peerConnection;
+}
+
+function announceViewerReady() {
+  if (currentMode !== 'viewer') return;
+  sendLiveSignal('viewer-ready', { wantsLivePreview: true });
+}
+
+function announceOperatorCameraReady() {
+  if (currentMode !== 'operator' || !cameraReady || operatorCameraAnnounced) return;
+  operatorCameraAnnounced = true;
+  sendLiveSignal('operator-camera-ready', { hasCamera: true });
+}
+
+async function maybeStartOperatorLiveStream() {
+  if (currentMode !== 'operator' || !stream || !cameraReady || !viewerClientId) return;
+  try {
+    const pc = createPeerConnection('operator');
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+    const offer = await pc.createOffer({ offerToReceiveVideo: false });
+    await pc.setLocalDescription(offer);
+    sendLiveSignal('webrtc-offer', { targetClientId: viewerClientId, description: pc.localDescription });
+    captureStatus.textContent = 'Sending live camera preview to viewer...';
+  } catch (error) {
+    captureStatus.textContent = `Could not start live preview: ${error.message}`;
+  }
+}
+
+async function handleLiveSignal(eventName, payload) {
+  if (!payload || payload.clientId === CLIENT_ID) return;
+  if (payload.targetClientId && payload.targetClientId !== CLIENT_ID) return;
+
+  if (eventName === 'viewer-ready') {
+    if (currentMode !== 'operator') return;
+    viewerClientId = payload.clientId;
+    captureStatus.textContent = cameraReady ? 'Viewer connected. Sending live camera preview...' : 'Viewer connected. Start Camera to send live preview.';
+    updateUi();
+    maybeStartOperatorLiveStream();
+    return;
+  }
+
+  if (eventName === 'operator-camera-ready') {
+    if (currentMode !== 'viewer') return;
+    captureStatus.textContent = 'Operator camera is ready. Waiting for live preview...';
+    announceViewerReady();
+    return;
+  }
+
+  if (eventName === 'webrtc-offer') {
+    if (currentMode !== 'viewer' || !payload.description) return;
+    try {
+      const pc = createPeerConnection('viewer');
+      await pc.setRemoteDescription(new RTCSessionDescription(payload.description));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      sendLiveSignal('webrtc-answer', { targetClientId: payload.clientId, description: pc.localDescription });
+      for (const candidate of pendingIceCandidates.splice(0)) await pc.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
+      captureStatus.textContent = 'Connecting live operator camera...';
+    } catch (error) {
+      captureStatus.textContent = `Live preview failed: ${error.message}`;
+    }
+    return;
+  }
+
+  if (eventName === 'webrtc-answer') {
+    if (currentMode !== 'operator' || !peerConnection || !payload.description) return;
+    try { await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.description)); }
+    catch (error) { captureStatus.textContent = `Viewer answer failed: ${error.message}`; }
+    return;
+  }
+
+  if (eventName === 'webrtc-ice') {
+    if (!payload.candidate) return;
+    if (!peerConnection || !peerConnection.remoteDescription) {
+      pendingIceCandidates.push(payload.candidate);
+      return;
+    }
+    try { await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate)); } catch (_) {}
+  }
+}
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 async function runCountdown() {
@@ -527,6 +671,11 @@ function initSupabaseSync() {
     supabaseChannel
       .on('broadcast', { event: 'state' }, event => applyRemoteState(event.payload))
       .on('broadcast', { event: 'capture-request' }, event => handleCaptureRequest(event.payload))
+      .on('broadcast', { event: 'viewer-ready' }, event => handleLiveSignal('viewer-ready', event.payload))
+      .on('broadcast', { event: 'operator-camera-ready' }, event => handleLiveSignal('operator-camera-ready', event.payload))
+      .on('broadcast', { event: 'webrtc-offer' }, event => handleLiveSignal('webrtc-offer', event.payload))
+      .on('broadcast', { event: 'webrtc-answer' }, event => handleLiveSignal('webrtc-answer', event.payload))
+      .on('broadcast', { event: 'webrtc-ice' }, event => handleLiveSignal('webrtc-ice', event.payload))
       .subscribe(status => {
         supabaseReady = status === 'SUBSCRIBED';
         updateLiveStatus(null, supabaseReady ? 'Supabase live sync connected.' : `Supabase status: ${status}`);
@@ -535,6 +684,8 @@ function initSupabaseSync() {
           pendingSupabasePayload = null;
           sendSupabaseState(payload);
         }
+        if (supabaseReady && currentMode === 'viewer') announceViewerReady();
+        if (supabaseReady && currentMode === 'operator' && cameraReady) { operatorCameraAnnounced = false; announceOperatorCameraReady(); maybeStartOperatorLiveStream(); }
       });
   } catch (error) {
     updateLiveStatus(null, `Supabase setup failed: ${error.message}`);
@@ -547,6 +698,7 @@ function initSync() {
     syncChannel = new BroadcastChannel('snap-it-up-live-room');
     syncChannel.onmessage = event => {
       if (event.data?.type === 'capture-request') handleCaptureRequest(event.data.payload);
+      else if (event.data?.type === 'live-signal') handleLiveSignal(event.data.eventName, event.data.payload);
       else applyRemoteState(event.data);
     };
   }
@@ -556,6 +708,9 @@ function initSync() {
     }
     if (event.key === `${SYNC_KEY}-capture-request` && event.newValue) {
       try { handleCaptureRequest(JSON.parse(event.newValue)); } catch (_) {}
+    }
+    if (event.key === `${SYNC_KEY}-live-signal` && event.newValue) {
+      try { const signal = JSON.parse(event.newValue); handleLiveSignal(signal.eventName, signal.payload); } catch (_) {}
     }
   });
   try {
