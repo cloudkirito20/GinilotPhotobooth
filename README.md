@@ -38,3 +38,15 @@ This version uses WebRTC for the Viewer live camera preview. The old JPEG snapsh
 - The operator camera remains the source of truth. The viewer only sends capture requests; the operator captures the photos and broadcasts the updated template state back to both screens.
 - Captured photo payloads are resized/compressed more aggressively so Photo 2 and Photo 3 sync more reliably through Supabase Realtime.
 - After all 3 photos are captured, the viewer can retake a selected photo or tap Done. Done automatically generates the QR panel for download, while the operator can print the final template.
+
+## v11 WebRTC reconnect fix
+
+This build retries the viewer-ready signal until the WebRTC video track is actually received. The operator will now resend the camera-ready signal and create a fresh WebRTC offer when a new viewer connects, even if the operator camera was already started before the viewer opened the page.
+
+Recommended order:
+1. Open Operator and click Start Camera.
+2. Open Viewer and choose Viewer.
+3. Wait for “Live operator camera connected.”
+4. Tap Start Session.
+
+If using two separate devices, make sure the Supabase URL and anon key are configured and both devices open the same deployed URL. Local tab sync only works on the same browser/device.

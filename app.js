@@ -1,6 +1,6 @@
 
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "PASTE_YOUR_SUPABASE_ANON_KEY_HERE";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
 
 const canvas = document.getElementById('boothCanvas');
 const ctx = canvas.getContext('2d');
@@ -64,6 +64,9 @@ let operatorCameraAnnounced = false;
 let pendingIceCandidates = [];
 let autoSessionActive = false;
 let autoSessionAbort = false;
+let viewerReadyTimer = null;
+let liveOfferInProgress = false;
+let lastLiveOfferAt = 0;
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
@@ -109,9 +112,7 @@ chooseViewerBtn.addEventListener('click', () => {
   captureStatus.textContent = 'Connecting to operator camera...';
   cameraFeed.classList.remove('hidden');
   livePreviewImage?.classList.add('hidden');
-  announceViewerReady();
-  setTimeout(announceViewerReady, 1200);
-  setTimeout(announceViewerReady, 3000);
+  startViewerReadyLoop();
 });
 
 function setPaper() {
@@ -328,7 +329,8 @@ function createPeerConnection(role) {
     cameraFeed.muted = true;
     cameraFeed.play().catch(() => {});
     cameraReady = true;
-    captureStatus.textContent = 'Live operator camera connected. Tap Capture Photo when ready.';
+    captureStatus.textContent = 'Live operator camera connected. Tap Start Session when ready.';
+    if (viewerReadyTimer) { clearInterval(viewerReadyTimer); viewerReadyTimer = null; }
     updateUi();
   };
   return peerConnection;
@@ -339,14 +341,38 @@ function announceViewerReady() {
   sendLiveSignal('viewer-ready', { wantsLivePreview: true });
 }
 
-function announceOperatorCameraReady() {
-  if (currentMode !== 'operator' || !cameraReady || operatorCameraAnnounced) return;
+function startViewerReadyLoop() {
+  if (viewerReadyTimer) clearInterval(viewerReadyTimer);
+  announceViewerReady();
+  viewerReadyTimer = setInterval(() => {
+    if (currentMode !== 'viewer') {
+      clearInterval(viewerReadyTimer);
+      viewerReadyTimer = null;
+      return;
+    }
+    const state = peerConnection?.connectionState;
+    const hasLiveVideo = !!remoteStream && cameraFeed.srcObject === remoteStream;
+    if (state === 'connected' && hasLiveVideo) return;
+    captureStatus.textContent = 'Connecting to operator camera...';
+    announceViewerReady();
+  }, 2000);
+}
+
+function announceOperatorCameraReady(force = false) {
+  if (currentMode !== 'operator' || !cameraReady) return;
+  if (operatorCameraAnnounced && !force) return;
   operatorCameraAnnounced = true;
   sendLiveSignal('operator-camera-ready', { hasCamera: true });
 }
 
-async function maybeStartOperatorLiveStream() {
+async function maybeStartOperatorLiveStream(force = false) {
   if (currentMode !== 'operator' || !stream || !cameraReady || !viewerClientId) return;
+  const state = peerConnection?.connectionState;
+  const now = Date.now();
+  if (!force && liveOfferInProgress) return;
+  if (!force && peerConnection && ['new', 'connecting', 'connected'].includes(state) && now - lastLiveOfferAt < 6000) return;
+  liveOfferInProgress = true;
+  lastLiveOfferAt = now;
   try {
     const pc = createPeerConnection('operator');
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
@@ -356,6 +382,8 @@ async function maybeStartOperatorLiveStream() {
     captureStatus.textContent = 'Sending live camera preview to viewer...';
   } catch (error) {
     captureStatus.textContent = `Could not start live preview: ${error.message}`;
+  } finally {
+    setTimeout(() => { liveOfferInProgress = false; }, 1200);
   }
 }
 
@@ -366,10 +394,12 @@ async function handleLiveSignal(eventName, payload) {
 
   if (eventName === 'viewer-ready') {
     if (currentMode !== 'operator') return;
+    const isNewViewer = viewerClientId !== payload.clientId;
     viewerClientId = payload.clientId;
     captureStatus.textContent = cameraReady ? 'Viewer connected. Sending live camera preview...' : 'Viewer connected. Start Camera to send live preview.';
     updateUi();
-    maybeStartOperatorLiveStream();
+    if (cameraReady) announceOperatorCameraReady(true);
+    maybeStartOperatorLiveStream(isNewViewer);
     return;
   }
 
@@ -777,8 +807,8 @@ function initSupabaseSync() {
           pendingSupabasePayload = null;
           sendSupabaseState(payload);
         }
-        if (supabaseReady && currentMode === 'viewer') announceViewerReady();
-        if (supabaseReady && currentMode === 'operator' && cameraReady) { operatorCameraAnnounced = false; announceOperatorCameraReady(); maybeStartOperatorLiveStream(); }
+        if (supabaseReady && currentMode === 'viewer') startViewerReadyLoop();
+        if (supabaseReady && currentMode === 'operator' && cameraReady) { operatorCameraAnnounced = false; announceOperatorCameraReady(true); maybeStartOperatorLiveStream(true); }
       });
   } catch (error) {
     updateLiveStatus(null, `Supabase setup failed: ${error.message}`);
