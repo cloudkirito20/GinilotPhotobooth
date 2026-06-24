@@ -22,3 +22,9 @@ This version supports browser-based Viewer-to-Operator camera preview and captur
 
 ## v6 Live Preview Fix
 The viewer now receives a low-latency browser-based live preview using compressed live-frame relay through the sync channel. WebRTC is still attempted when available, but the frame relay provides a more reliable browser-only fallback. If Supabase shows CHANNEL_ERROR, confirm the anon key is correct and Realtime is enabled for the project.
+
+
+## v7 changes
+- Operator camera panel now shows Start Camera only. The manual Capture Photo button is hidden in Operator mode.
+- Viewer Capture Photo is enabled after the live operator camera preview connects, even when the template state has not fully mirrored yet.
+- Live preview frame relay is lighter to reduce tablet lag: lower preview resolution, stronger JPEG compression, and a slower send interval.

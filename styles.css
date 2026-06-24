@@ -148,6 +148,9 @@ body.viewer-mode canvas { width: min(100%, 440px); }
 body.viewer-mode #finalActionsPanel { margin-top: 14px; }
 body.viewer-mode #finalActionsPanel h2::after { content: ' — choose a photo to retake or tap Done'; color: var(--muted); font-size: 12px; font-weight: 700; display: block; margin-top: 4px; }
 body.viewer-mode #qrPanel { margin-top: 14px; }
+body.operator-mode #captureBtn { display: none !important; }
+body.operator-mode .button-row { grid-template-columns: 1fr; }
+
 
 @media (max-width: 620px) {
   .role-buttons { grid-template-columns: 1fr; }

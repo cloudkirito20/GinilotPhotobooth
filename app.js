@@ -65,7 +65,7 @@ let pendingIceCandidates = [];
 let liveFrameTimer = null;
 let lastLiveFrameSentAt = 0;
 let lastLiveFrameReceivedAt = 0;
-const LIVE_FRAME_INTERVAL_MS = 450;
+const LIVE_FRAME_INTERVAL_MS = 650;
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
@@ -216,10 +216,10 @@ function updateUi() {
     : `Photo ${nextNumber} of 3. Click Capture Photo when ready.`;
 
   const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
-  const viewerCanRequest = currentMode === 'viewer' && templateImage && !(complete && !isRetaking) && !pendingCaptureRequest;
-  const operatorCanCapture = currentMode === 'operator' && videoReady && templateImage && !(complete && !isRetaking);
-  captureBtn.disabled = currentMode === 'viewer' ? !viewerCanRequest : !operatorCanCapture;
-  captureBtn.textContent = currentMode === 'viewer' ? 'Capture Photo' : 'Capture Photo';
+  const viewerHasLiveOperatorCamera = currentMode === 'viewer' && (cameraReady || (Date.now() - lastLiveFrameReceivedAt < 5000) || !!remoteStream);
+  const viewerCanRequest = currentMode === 'viewer' && viewerHasLiveOperatorCamera && !(complete && !isRetaking) && !pendingCaptureRequest;
+  captureBtn.disabled = currentMode === 'viewer' ? !viewerCanRequest : true;
+  captureBtn.textContent = 'Capture Photo';
 
   resetTemplateBtn.disabled = !templateImage;
   finalActionsPanel.classList.toggle('hidden', !complete || isRetaking);
@@ -285,7 +285,7 @@ function stopOperatorFrameRelay() {
 
 function captureLivePreviewFrame() {
   if (!stream || !cameraReady || !cameraFeed.videoWidth || !cameraFeed.videoHeight) return null;
-  const maxWidth = 420;
+  const maxWidth = 320;
   const scale = Math.min(1, maxWidth / cameraFeed.videoWidth);
   const frameCanvas = document.createElement('canvas');
   frameCanvas.width = Math.max(1, Math.round(cameraFeed.videoWidth * scale));
@@ -294,7 +294,7 @@ function captureLivePreviewFrame() {
   frameCtx.imageSmoothingEnabled = true;
   frameCtx.imageSmoothingQuality = 'medium';
   frameCtx.drawImage(cameraFeed, 0, 0, frameCanvas.width, frameCanvas.height);
-  return frameCanvas.toDataURL('image/jpeg', 0.38);
+  return frameCanvas.toDataURL('image/jpeg', 0.28);
 }
 
 function sendOperatorLiveFrame() {
@@ -523,7 +523,8 @@ function getNextCaptureSlotIndex() {
 
 function sendCaptureRequest() {
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
-  if (!templateImage || (complete && retakeIndex === null)) return;
+  const viewerHasLiveOperatorCamera = cameraReady || (Date.now() - lastLiveFrameReceivedAt < 5000) || !!remoteStream;
+  if ((complete && retakeIndex === null) || !viewerHasLiveOperatorCamera || pendingCaptureRequest) return;
   const request = {
     requestId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
     timestamp: Date.now(),
@@ -561,8 +562,6 @@ captureBtn.addEventListener('click', async () => {
   if (currentMode === 'viewer') {
     await runCountdown();
     sendCaptureRequest();
-  } else {
-    await performOperatorCapture('operator');
   }
 });
 
