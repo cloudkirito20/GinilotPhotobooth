@@ -64,6 +64,7 @@ let operatorCameraAnnounced = false;
 let pendingIceCandidates = [];
 let autoSessionActive = false;
 let autoSessionAbort = false;
+let autoSessionToken = 0;
 let viewerReadyTimer = null;
 let liveOfferInProgress = false;
 let lastLiveOfferAt = 0;
@@ -245,6 +246,7 @@ function resetSession() {
   viewerDone = false;
   autoSessionActive = false;
   autoSessionAbort = true;
+  autoSessionToken++;
   pendingCaptureRequest = null;
   qrPanel.classList.add('hidden');
   if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -536,7 +538,7 @@ function captureVisibleVideoFallback(slotIndex, requestId) {
   return true;
 }
 
-async function performOperatorCapture(source = 'operator') {
+async function performOperatorCapture(source = 'operator', slotOverride = null) {
   if (!templateImage) {
     captureStatus.textContent = 'Upload a template before capturing.';
     return;
@@ -548,7 +550,7 @@ async function performOperatorCapture(source = 'operator') {
     return;
   }
   if (source !== 'remote') await runCountdown();
-  captureToTemplate();
+  captureToTemplate(slotOverride);
   showFlash();
 }
 
@@ -559,9 +561,10 @@ function getNextCaptureSlotIndex() {
 }
 
 
-function sendCaptureRequest(slotOverride = null) {
+function sendCaptureRequest(slotOverride = null, options = {}) {
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
-  if ((complete && retakeIndex === null) || pendingCaptureRequest) return null;
+  if ((complete && retakeIndex === null) || (pendingCaptureRequest && !options.force)) return null;
+  if (options.force) pendingCaptureRequest = null;
   // Do not block capture just because the WebRTC live preview is not connected.
   // The request goes to the operator; the operator captures using their local camera.
   if (currentMode === 'viewer' && !hasViewerLiveVideo()) {
@@ -586,8 +589,9 @@ function sendCaptureRequest(slotOverride = null) {
   setTimeout(() => {
     if (pendingCaptureRequest === request.requestId) {
       pendingCaptureRequest = null;
-      autoSessionActive = false;
-      captureStatus.textContent = 'No operator photo received yet. Confirm the operator laptop camera is started, then try again.';
+      if (!autoSessionActive) {
+        captureStatus.textContent = 'No operator photo received yet. Confirm the operator laptop camera is started, then try again.';
+      }
       updateUi();
     }
   }, 18000);
@@ -598,15 +602,33 @@ function sendCaptureRequest(slotOverride = null) {
   return request.requestId;
 }
 
-function waitForPhoto(slotIndex, previousSrc, timeoutMs = 20000) {
+function waitForPhoto(slotIndex, previousSrc, timeoutMs = 24000) {
   const start = Date.now();
   return new Promise(resolve => {
     const timer = setInterval(() => {
-      const received = !!photoDataUrls[slotIndex] && photoDataUrls[slotIndex] !== previousSrc;
-      if (received) { clearInterval(timer); resolve(true); }
-      else if (Date.now() - start > timeoutMs || autoSessionAbort) { clearInterval(timer); resolve(false); }
-    }, 200);
+      const src = photoDataUrls[slotIndex];
+      const received = !!src && src !== previousSrc;
+      if (received) {
+        pendingCaptureRequest = null;
+        clearInterval(timer);
+        resolve(true);
+      } else if (Date.now() - start > timeoutMs || autoSessionAbort) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, 150);
   });
+}
+
+async function requestCaptureAndWait(slot, label) {
+  const previous = photoDataUrls[slot] || null;
+  pendingCaptureRequest = null;
+  const requestId = sendCaptureRequest(slot, { force: true });
+  if (!requestId) return false;
+  captureStatus.textContent = `${label}: waiting for operator camera capture...`;
+  const ok = await waitForPhoto(slot, previous);
+  pendingCaptureRequest = null;
+  return ok;
 }
 
 async function runViewerAutoSession() {
@@ -643,27 +665,21 @@ async function runViewerAutoSession() {
 
   autoSessionActive = true;
   autoSessionAbort = false;
+  const myToken = ++autoSessionToken;
   pendingCaptureRequest = null;
   captureStatus.textContent = 'Session started. Capturing 3 photos automatically.';
   updateUi();
 
   for (let slot = 0; slot < 3; slot++) {
-    if (autoSessionAbort) break;
+    if (autoSessionAbort || myToken !== autoSessionToken) break;
     const cue = slot === 0 ? 'Get ready' : (slot === 1 ? 'Again' : 'Last na');
     const countdownPrompt = `Photo ${slot + 1} of 3`;
-    const previous = photoDataUrls[slot] || null;
     captureStatus.textContent = `Photo ${slot + 1} of 3: ${cue}.`;
     await showSessionCue(cue, slot === 0 ? 'Starting session' : 'Next photo');
+    if (autoSessionAbort || myToken !== autoSessionToken) break;
     await runCountdown(countdownPrompt);
-    const requestId = sendCaptureRequest(slot);
-    if (!requestId) {
-      captureStatus.textContent = 'Capture request could not be sent. Please check live sync and try again.';
-      autoSessionActive = false;
-      updateUi();
-      return;
-    }
-    const ok = await waitForPhoto(slot, previous);
-    pendingCaptureRequest = null;
+    if (autoSessionAbort || myToken !== autoSessionToken) break;
+    const ok = await requestCaptureAndWait(slot, `Photo ${slot + 1}`);
     if (!ok) {
       captureStatus.textContent = `Photo ${slot + 1} was not received. Please check the operator camera and live sync, then start again.`;
       autoSessionActive = false;
@@ -686,7 +702,7 @@ function handleCaptureRequest(request) {
   const slotIndex = Number.isInteger(request.retakeIndex) ? request.retakeIndex : request.slotIndex;
   if (Number.isInteger(slotIndex) && slotIndex >= 0 && slotIndex < 3) retakeIndex = slotIndex;
   captureStatus.textContent = `Viewer requested Photo ${(Number.isInteger(slotIndex) ? slotIndex : 0) + 1}. Capturing from operator camera...`;
-  performOperatorCapture('remote');
+  performOperatorCapture('remote', Number.isInteger(slotIndex) ? slotIndex : null);
 }
 
 captureBtn.addEventListener('click', async () => {
@@ -809,7 +825,7 @@ async function sendSupabaseState(payload) {
 
 function applyRemoteState(payload) {
   if (!payload || payload.clientId === CLIENT_ID) return;
-  if (pendingCaptureRequest && payload.reason === 'photo-captured') {
+  if (pendingCaptureRequest && (payload.reason === 'photo-captured' || payload.reason === 'photo-captured-viewer-fallback')) {
     pendingCaptureRequest = null;
     captureStatus.textContent = 'Photo received from operator camera.';
   }
