@@ -3,17 +3,20 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>PhotoBooth Studio - Phase 1</title>
+  <title>Snap It Up! Photobooth</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
   <div class="app-shell">
     <header class="topbar">
       <div class="brand">
-        <div class="brand-mark">PB</div>
-        <div>
-          <h1>PhotoBooth Studio</h1>
-          <p>Phase 1 Session Capture</p>
+        <div class="brand-logo-frame">
+          <img class="brand-logo" src="snap-it-up-circle-logo.png" alt="Snap It Up! logo" />
+        </div>
+        <div class="brand-copy">
+          <span class="eyebrow">Premium Photobooth Studio</span>
+          <h1><span>Snap</span> It Up!</h1>
+          <p>Life in Smiles • Session Capture Suite</p>
         </div>
       </div>
       <nav class="tabs" aria-label="Application menu">
@@ -40,7 +43,7 @@
     <section class="tab-panel" id="about-panel">
       <div class="panel-card compact">
         <strong>About</strong>
-        <span>A browser-based photobooth prototype for template-based 3-photo sessions.</span>
+        <span>Snap It Up! browser-based photobooth prototype for template-based 3-photo sessions.</span>
       </div>
     </section>
 
@@ -106,6 +109,14 @@
         </div>
       </section>
     </main>
+  </div>
+
+  <div id="printOverlay" class="print-overlay hidden" role="status" aria-live="polite">
+    <div class="print-loader-card">
+      <div class="spinner"></div>
+      <h2>Printing your photo...</h2>
+      <p>Please wait while Snap It Up! sends your template to the printer.</p>
+    </div>
   </div>
 
   <script src="app.js"></script>

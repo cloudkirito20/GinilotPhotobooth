@@ -13,6 +13,7 @@ const orientation = document.getElementById('orientation');
 const paperBadge = document.getElementById('paperBadge');
 const captureStatus = document.getElementById('captureStatus');
 const emptyState = document.getElementById('emptyState');
+const printOverlay = document.getElementById('printOverlay');
 
 let templateImage = null;
 let capturedPhotos = [];
@@ -254,9 +255,28 @@ captureBtn.addEventListener('click', () => {
   img.src = shotCanvas.toDataURL('image/png');
 });
 
+function showPrintLoading() {
+  printOverlay.classList.remove('hidden');
+  printBtn.disabled = true;
+  saveBtn.disabled = true;
+}
+
+function finishPrinting() {
+  printOverlay.classList.add('hidden');
+  resetSession();
+}
+
 printBtn.addEventListener('click', () => {
-  window.print();
-  setTimeout(resetSession, 500);
+  showPrintLoading();
+  setTimeout(() => window.print(), 150);
+});
+
+window.addEventListener('afterprint', finishPrinting);
+
+// Some browsers do not reliably fire afterprint, so this safely clears the
+// loading state after the print dialog has had time to close.
+window.matchMedia('print').addEventListener?.('change', event => {
+  if (!event.matches) finishPrinting();
 });
 
 saveBtn.addEventListener('click', () => {

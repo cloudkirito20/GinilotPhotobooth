@@ -1,42 +1,18 @@
-# PhotoBooth Studio - Phase 1
+# Snap It Up! Photobooth - Phase 1
 
-A browser-based photobooth prototype for a 3-photo session workflow.
+Modern browser-based photobooth prototype.
 
-## Features
+## Updates in this version
+- Uses the circle-only Snap It Up! logo with transparent outside area.
+- Adds a printing loading overlay while the print dialog/process is active.
+- Clears the 3 captured photos after printing is complete.
+- Keeps template upload/reset, draggable/resizable photo slots, portrait/landscape orientation, paper size selection, camera capture, print, save, and reset session.
 
-- Modern UI with File, Edit, and About tabs
-- Upload a picture/template before the session
-- Select paper size at the start of the photobooth session
-- Use browser camera access for an external webcam/camera
-- Capture 3 photos and automatically place them on the template
-- Print the completed layout
-- Save the final layout as PNG
-- After clicking Print, captured photos are cleared and a new session starts
-
-## How to run
-
-Open `index.html` in a browser. For best camera support, run from localhost:
+## Run locally
+Open `index.html` in a modern browser, or run:
 
 ```bash
 python -m http.server 8000
 ```
 
-Then open:
-
-```text
-http://localhost:8000
-```
-
-## Notes
-
-Browsers require camera permission. External cameras usually appear automatically as the selected webcam. A future phase can add camera-device selection, drag-and-drop photo slot positioning, admin settings, event branding, gallery storage, and payment support.
-
-
-Update: Use **Reset Template** to clear the currently loaded template and begin with a new template upload.
-
-
-## Latest Update
-- Added Portrait/Landscape orientation selection.
-- Photo containers/slots can now be dragged directly on the template preview.
-- Each slot has a bottom-right resize handle.
-- Slot positions are saved as percentages, so layouts remain proportional when changing paper size or orientation.
+Then visit `http://localhost:8000`.
