@@ -38,6 +38,7 @@ const appShell = document.getElementById('appShell');
 const chooseViewerBtn = document.getElementById('chooseViewerBtn');
 const chooseOperatorBtn = document.getElementById('chooseOperatorBtn');
 const doneBtn = document.getElementById('doneBtn');
+const retakeAllBtn = document.getElementById('retakeAllBtn');
 
 let templateImage = null;
 let capturedPhotos = [];
@@ -290,9 +291,9 @@ function updateUi() {
   const nextNumber = isRetaking ? retakeIndex + 1 : Math.min(count + 1, 3);
   if (!autoSessionActive && !shouldPreserveViewerCaptureStatus()) {
     captureStatus.textContent = complete && !isRetaking
-      ? 'Final template is ready. Choose a photo to retake or tap Done.'
+      ? (currentMode === 'viewer' ? 'Final template is ready. Tap Retake Photos or Done.' : 'Final template is ready. Choose a photo to retake or print.')
       : (currentMode === 'viewer'
-        ? 'Tap Start Session. The app will capture all 3 photos automatically.'
+        ? 'Tap Start Session. The viewer will capture all 3 photos locally from the live preview.'
         : `Photo ${nextNumber} of 3. Waiting for viewer session.`);
   }
 
@@ -646,6 +647,68 @@ function captureVisibleVideoFallback(slotIndex, requestId) {
   return true;
 }
 
+
+function captureViewerFrameToTemplate(slotIndex, reason = 'photo-captured-viewer-local') {
+  if (currentMode !== 'viewer') return false;
+  if (!templateImage) {
+    captureStatus.textContent = 'Waiting for operator template. Please upload/sync the template first.';
+    return false;
+  }
+  if (!canCaptureFromVisibleVideo()) {
+    captureStatus.textContent = 'Live preview is not ready yet. Reconnecting to operator camera...';
+    announceViewerReady();
+    startViewerReadyLoop();
+    return false;
+  }
+  const shotCanvas = document.createElement('canvas');
+  shotCanvas.width = cameraFeed.videoWidth;
+  shotCanvas.height = cameraFeed.videoHeight;
+  const shotCtx = shotCanvas.getContext('2d');
+  shotCtx.translate(shotCanvas.width, 0);
+  shotCtx.scale(-1, 1);
+  shotCtx.drawImage(cameraFeed, 0, 0, shotCanvas.width, shotCanvas.height);
+  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.56);
+  const img = new Image();
+  img.onload = () => {
+    capturedPhotos[slotIndex] = img;
+    photoDataUrls[slotIndex] = dataUrl;
+    retakeIndex = null;
+    viewerDone = false;
+    pendingCaptureRequest = null;
+    activeCaptureCommand = null;
+    qrPanel.classList.add('hidden');
+    cacheCurrentSession();
+    drawCanvas();
+    updateUi();
+    broadcastState(reason);
+  };
+  img.src = dataUrl;
+  showFlash();
+  return true;
+}
+
+function clearViewerPhotosOnly(reason = 'retake-all') {
+  capturedPhotos = [];
+  photoDataUrls = [];
+  retakeIndex = null;
+  viewerDone = false;
+  pendingCaptureRequest = null;
+  activeCaptureCommand = null;
+  qrPanel.classList.add('hidden');
+  cacheCurrentSession();
+  drawCanvas();
+  broadcastState(reason);
+}
+
+function showSessionLoading(title = 'Preparing your template...', message = 'Please wait while Snap It Up! places your photos into the template.') {
+  const h = printOverlay.querySelector('h2');
+  const p = printOverlay.querySelector('p');
+  if (h) h.textContent = title;
+  if (p) p.textContent = message;
+  printOverlay.classList.remove('hidden');
+}
+function hideSessionLoading() { printOverlay.classList.add('hidden'); }
+
 async function performOperatorCapture(source = 'operator', slotOverride = null) {
   operatorCaptureBusy = true;
   if (!templateImage) {
@@ -758,74 +821,81 @@ async function requestCaptureAndWait(slot, label) {
 
 async function runViewerAutoSession() {
   if (autoSessionActive) return;
-  const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
-  if (complete && retakeIndex === null) return;
-  // WebRTC preview is helpful but must not block starting the photo session.
-  if (!hasViewerLiveVideo()) {
-    announceViewerReady();
-    startViewerReadyLoop();
-    captureStatus.textContent = 'Starting session. Live preview is still reconnecting, but capture will use the operator camera.';
+  if (currentMode !== 'viewer') return;
+
+  if (!templateImage) {
+    captureStatus.textContent = 'Waiting for the operator to upload or sync the template.';
+    updateUi();
+    return;
   }
 
-  if (retakeIndex !== null) {
-    autoSessionActive = true;
-    autoSessionAbort = false;
-    const slot = retakeIndex;
-    const previous = photoDataUrls[slot] || null;
-    captureStatus.textContent = `Retaking Photo ${slot + 1}.`;
-    await runCountdown('Retake');
-    const requestId = sendCaptureRequest(slot);
-    if (!requestId) {
-      autoSessionActive = false;
-      captureStatus.textContent = 'Retake request could not be sent. Please check live sync and try again.';
+  const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
+  if (complete && retakeIndex === null) return;
+
+  if (!hasViewerLiveVideo() || !canCaptureFromVisibleVideo()) {
+    announceViewerReady();
+    startViewerReadyLoop();
+    captureStatus.textContent = 'Waiting for live operator preview. The session will start after the preview is visible.';
+    const ready = await new Promise(resolve => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (hasViewerLiveVideo() && canCaptureFromVisibleVideo()) { clearInterval(timer); resolve(true); }
+        if (Date.now() - started > 12000) { clearInterval(timer); resolve(false); }
+      }, 250);
+    });
+    if (!ready) {
+      captureStatus.textContent = 'Live operator preview is not ready. Keep the operator camera open, then tap Start Session again.';
       updateUi();
       return;
     }
-    const ok = await waitForPhoto(slot, previous);
-    autoSessionActive = false;
-    if (ok) captureStatus.textContent = 'Retake received. Review the final template.';
-    updateUi();
-    return;
   }
 
   autoSessionActive = true;
   autoSessionAbort = false;
   const myToken = ++autoSessionToken;
   pendingCaptureRequest = null;
-  captureStatus.textContent = 'Session started. Capturing 3 photos automatically.';
+  activeCaptureCommand = null;
+  viewerSessionStatusLockedUntil = Date.now() + 90000;
+  captureStatus.textContent = 'Session started. Capturing all 3 photos locally from the live preview.';
   updateUi();
+  broadcastState('viewer-session-started');
 
   for (let slot = 0; slot < 3; slot++) {
     if (autoSessionAbort || myToken !== autoSessionToken) break;
-    const cue = slot === 0 ? 'Get ready' : (slot === 1 ? 'Again' : 'Last na');
-    const countdownPrompt = `Photo ${slot + 1} of 3`;
+    const cue = slot === 0 ? 'Get ready' : (slot === 1 ? 'Again' : 'Last');
     captureStatus.textContent = `Photo ${slot + 1} of 3: ${cue}.`;
     await showSessionCue(cue, slot === 0 ? 'Starting session' : 'Next photo');
     if (autoSessionAbort || myToken !== autoSessionToken) break;
-    await runCountdown(countdownPrompt);
+    await runCountdown(`Photo ${slot + 1} of 3`);
     if (autoSessionAbort || myToken !== autoSessionToken) break;
-    let ok = false;
-    for (let attempt = 1; attempt <= 3 && !ok; attempt++) {
-      ok = await requestCaptureAndWait(slot, `Photo ${slot + 1}`);
-      if (!ok && attempt < 3) {
-        captureStatus.textContent = `Photo ${slot + 1} did not come back yet. Retrying without resetting the session...`;
-        await sleep(900);
-      }
-    }
+    const ok = captureViewerFrameToTemplate(slot, 'photo-captured-viewer-local');
     if (!ok) {
-      captureStatus.textContent = `Photo ${slot + 1} was not received. Please check the operator camera and live sync, then start again.`;
       autoSessionActive = false;
       viewerSessionStatusLockedUntil = 0;
       updateUi();
       return;
     }
-    if (slot < 2) await sleep(850);
+    captureStatus.textContent = `Photo ${slot + 1} captured.`;
+    await sleep(650);
   }
 
+  if (autoSessionAbort || myToken !== autoSessionToken) {
+    autoSessionActive = false;
+    viewerSessionStatusLockedUntil = 0;
+    updateUi();
+    return;
+  }
+
+  showSessionLoading('Preparing your preview...', 'Placing your photos into the template and syncing the final preview to the operator.');
+  broadcastState('final-preview-loading');
+  await sleep(1300);
   autoSessionActive = false;
   viewerSessionStatusLockedUntil = 0;
-  captureStatus.textContent = 'All 3 photos captured. Review the template, retake a photo, or tap Done.';
   drawCanvas();
+  cacheCurrentSession();
+  broadcastState('final-preview-ready');
+  hideSessionLoading();
+  captureStatus.textContent = 'Preview template is ready. Retake the photos or tap Done.';
   updateUi();
 }
 
@@ -944,10 +1014,16 @@ function generateFinalQr() {
   }, 'image/png');
 }
 generateQrBtn.addEventListener('click', generateFinalQr);
+retakeAllBtn?.addEventListener('click', async () => {
+  clearViewerPhotosOnly('retake-all');
+  captureStatus.textContent = 'Retaking the full 3-photo session.';
+  await sleep(250);
+  runViewerAutoSession();
+});
 doneBtn.addEventListener('click', () => {
   viewerDone = true;
   generateQrBtn.classList.remove('hidden');
-  captureStatus.textContent = 'Session done. QR is ready for download. Operator may print the final photo.';
+  captureStatus.textContent = 'Session done. Generating QR. Operator preview is synced for printing.';
   generateFinalQr();
   updateUi();
   broadcastState('viewer-done');
