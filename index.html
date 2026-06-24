@@ -38,7 +38,7 @@
       </nav>
     </header>
 
-    <section class="tab-panel active" id="file-panel"><strong>File</strong><span> Upload a template, start the camera, capture 3 photos, then print, save, or generate a QR.</span></section>
+    <section class="tab-panel active" id="file-panel"><strong>File</strong><span> Upload a template, start the camera, let the viewer run the automatic 3-photo session, then print, save, or generate a QR.</span></section>
     <section class="tab-panel" id="edit-panel"><strong>Edit</strong><span> Drag or resize each photo slot directly on the template preview.</span></section>
     <section class="tab-panel" id="about-panel"><strong>About</strong><span> Snap It Up! browser-based photobooth prototype.</span></section>
 
@@ -89,7 +89,7 @@
           </div>
           <div class="button-row">
             <button id="startCameraBtn" class="primary">Start Camera</button>
-            <button id="captureBtn" disabled>Capture Photo</button>
+            <button id="captureBtn" disabled>Start Session</button>
           </div>
           <p id="captureStatus" class="status">Ready to start.</p>
         </section>
@@ -120,7 +120,7 @@
         <div class="preview-header">
           <div>
             <h2 id="mainPreviewTitle">Template Preview</h2>
-            <p id="mainPreviewText">Operator can drag and resize the photo slots. Viewer captures photos automatically into the template.</p>
+            <p id="mainPreviewText">Operator can drag and resize the photo slots. Viewer starts the session and the app automatically captures all 3 photos in sequence.</p>
           </div>
           <span id="paperBadge">4 x 6 in • Portrait</span>
         </div>

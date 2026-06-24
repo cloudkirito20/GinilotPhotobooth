@@ -29,3 +29,12 @@ This version uses WebRTC for the Viewer live camera preview. The old JPEG snapsh
 - Capture requests still go Viewer → Operator.
 - Captured photos now sync Operator → Viewer after the photo image has fully loaded.
 - Remote photo loading now ignores empty slots instead of creating broken image entries.
+
+
+## v10 Automatic viewer session
+
+- The Viewer button now starts a full automated 3-photo sequence.
+- Sequence: Start Session -> 3, 2, 1, Smile -> Again -> 3, 2, 1, Smile -> Last na -> 3, 2, 1, Smile.
+- The operator camera remains the source of truth. The viewer only sends capture requests; the operator captures the photos and broadcasts the updated template state back to both screens.
+- Captured photo payloads are resized/compressed more aggressively so Photo 2 and Photo 3 sync more reliably through Supabase Realtime.
+- After all 3 photos are captured, the viewer can retake a selected photo or tap Done. Done automatically generates the QR panel for download, while the operator can print the final template.

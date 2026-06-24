@@ -1,6 +1,6 @@
 
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
-const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
+const SUPABASE_PUBLISHABLE_KEY = "PASTE_YOUR_SUPABASE_ANON_KEY_HERE";
 
 const canvas = document.getElementById('boothCanvas');
 const ctx = canvas.getContext('2d');
@@ -62,6 +62,8 @@ let remoteStream = null;
 let viewerClientId = null;
 let operatorCameraAnnounced = false;
 let pendingIceCandidates = [];
+let autoSessionActive = false;
+let autoSessionAbort = false;
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
@@ -207,15 +209,19 @@ function updateUi() {
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
   const isRetaking = retakeIndex !== null;
   const nextNumber = isRetaking ? retakeIndex + 1 : Math.min(count + 1, 3);
-  captureStatus.textContent = complete && !isRetaking
-    ? 'Final template is ready. Choose a photo to retake or tap Done.'
-    : `Photo ${nextNumber} of 3. Click Capture Photo when ready.`;
+  if (!autoSessionActive) {
+    captureStatus.textContent = complete && !isRetaking
+      ? 'Final template is ready. Choose a photo to retake or tap Done.'
+      : (currentMode === 'viewer'
+        ? 'Tap Start Session. The app will capture all 3 photos automatically.'
+        : `Photo ${nextNumber} of 3. Waiting for viewer session.`);
+  }
 
   const videoReady = cameraReady || (!!stream && cameraFeed.readyState >= 1 && cameraFeed.videoWidth > 0);
   const viewerHasLiveOperatorCamera = currentMode === 'viewer' && (cameraReady || !!remoteStream);
-  const viewerCanRequest = currentMode === 'viewer' && viewerHasLiveOperatorCamera && !(complete && !isRetaking) && !pendingCaptureRequest;
+  const viewerCanRequest = currentMode === 'viewer' && viewerHasLiveOperatorCamera && !(complete && !isRetaking) && !pendingCaptureRequest && !autoSessionActive;
   captureBtn.disabled = currentMode === 'viewer' ? !viewerCanRequest : true;
-  captureBtn.textContent = 'Capture Photo';
+  captureBtn.textContent = isRetaking ? `Retake Photo ${retakeIndex + 1}` : 'Start Session';
 
   resetTemplateBtn.disabled = !templateImage;
   finalActionsPanel.classList.toggle('hidden', !complete || isRetaking);
@@ -236,6 +242,9 @@ function resetSession() {
   photoDataUrls = [];
   retakeIndex = null;
   viewerDone = false;
+  autoSessionActive = false;
+  autoSessionAbort = true;
+  pendingCaptureRequest = null;
   qrPanel.classList.add('hidden');
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = null;
@@ -405,18 +414,24 @@ async function handleLiveSignal(eventName, payload) {
 }
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
-async function runCountdown() {
+async function runCountdown(message = 'Get ready') {
   captureBtn.disabled = true;
   countdownOverlay.classList.remove('hidden');
-  for (const value of ['3','2','1']) { countdownNumber.textContent = value; countdownLabel.textContent = 'Get ready'; await sleep(850); }
-  countdownNumber.textContent = '📸'; countdownLabel.textContent = 'Smile!'; await sleep(450);
+  for (const value of ['3','2','1']) {
+    countdownNumber.textContent = value;
+    countdownLabel.textContent = message;
+    await sleep(850);
+  }
+  countdownNumber.textContent = '📸';
+  countdownLabel.textContent = 'Smile!';
+  await sleep(450);
   countdownOverlay.classList.add('hidden');
 }
 function showFlash() { flashOverlay.classList.remove('hidden'); setTimeout(() => flashOverlay.classList.add('hidden'), 340); }
 function captureToTemplate() {
   const sourceWidth = cameraFeed.videoWidth || 1280;
   const sourceHeight = cameraFeed.videoHeight || 720;
-  const maxSyncWidth = 720;
+  const maxSyncWidth = 480;
   const scale = Math.min(1, maxSyncWidth / sourceWidth);
   const shotCanvas = document.createElement('canvas');
   shotCanvas.width = Math.round(sourceWidth * scale);
@@ -427,7 +442,7 @@ function captureToTemplate() {
   shotCtx.drawImage(cameraFeed, 0, 0, sourceWidth, sourceHeight, 0, 0, shotCanvas.width, shotCanvas.height);
   const img = new Image();
   // Keep the payload small enough for Supabase Realtime broadcast. Large camera frames can silently fail to sync.
-  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.58);
+  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.42);
   img.onload = () => {
     const slotIndex = retakeIndex !== null ? retakeIndex : getNextCaptureSlotIndex();
     capturedPhotos[slotIndex] = img;
@@ -463,31 +478,96 @@ function getNextCaptureSlotIndex() {
   return next === -1 ? Math.min(capturedPhotos.length, 2) : next;
 }
 
-function sendCaptureRequest() {
+
+function sendCaptureRequest(slotOverride = null) {
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
   const viewerHasLiveOperatorCamera = cameraReady || !!remoteStream;
-  if ((complete && retakeIndex === null) || !viewerHasLiveOperatorCamera || pendingCaptureRequest) return;
+  if ((complete && retakeIndex === null) || !viewerHasLiveOperatorCamera || pendingCaptureRequest) return null;
+  const requestedSlot = Number.isInteger(slotOverride) ? slotOverride : getNextCaptureSlotIndex();
   const request = {
     requestId: crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()),
     timestamp: Date.now(),
     clientId: CLIENT_ID,
     sourceMode: currentMode,
-    slotIndex: getNextCaptureSlotIndex(),
+    slotIndex: requestedSlot,
     retakeIndex: retakeIndex
   };
   pendingCaptureRequest = request.requestId;
-  captureStatus.textContent = `Capture request sent to operator for Photo ${request.slotIndex + 1}. Waiting for camera...`;
+  captureStatus.textContent = `Capture request sent for Photo ${requestedSlot + 1}. Waiting for operator camera...`;
   setTimeout(() => {
     if (pendingCaptureRequest === request.requestId) {
       pendingCaptureRequest = null;
+      autoSessionActive = false;
       captureStatus.textContent = 'No operator photo received yet. Confirm the operator laptop camera is started, then try again.';
       updateUi();
     }
-  }, 15000);
+  }, 18000);
   updateUi();
   try { localStorage.setItem(`${SYNC_KEY}-capture-request`, JSON.stringify(request)); } catch (_) {}
   try { syncChannel?.postMessage({ type: 'capture-request', payload: request }); } catch (_) {}
   sendSupabaseCaptureRequest(request);
+  return request.requestId;
+}
+
+function waitForPhoto(slotIndex, previousSrc, timeoutMs = 20000) {
+  const start = Date.now();
+  return new Promise(resolve => {
+    const timer = setInterval(() => {
+      const received = !!photoDataUrls[slotIndex] && photoDataUrls[slotIndex] !== previousSrc;
+      if (received) { clearInterval(timer); resolve(true); }
+      else if (Date.now() - start > timeoutMs || autoSessionAbort) { clearInterval(timer); resolve(false); }
+    }, 200);
+  });
+}
+
+async function runViewerAutoSession() {
+  if (autoSessionActive) return;
+  const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
+  if (complete && retakeIndex === null) return;
+
+  if (retakeIndex !== null) {
+    autoSessionActive = true;
+    autoSessionAbort = false;
+    const slot = retakeIndex;
+    const previous = photoDataUrls[slot] || null;
+    captureStatus.textContent = `Retaking Photo ${slot + 1}.`;
+    await runCountdown('Retake');
+    sendCaptureRequest(slot);
+    const ok = await waitForPhoto(slot, previous);
+    autoSessionActive = false;
+    if (ok) captureStatus.textContent = 'Retake received. Review the final template.';
+    updateUi();
+    return;
+  }
+
+  autoSessionActive = true;
+  autoSessionAbort = false;
+  pendingCaptureRequest = null;
+  captureStatus.textContent = 'Session started. Capturing 3 photos automatically.';
+  updateUi();
+
+  for (let slot = 0; slot < 3; slot++) {
+    if (autoSessionAbort) break;
+    const prompt = slot === 0 ? 'Get ready' : (slot === 1 ? 'Again' : 'Last na');
+    const previous = photoDataUrls[slot] || null;
+    captureStatus.textContent = `Photo ${slot + 1} of 3: ${prompt}.`;
+    await runCountdown(prompt);
+    sendCaptureRequest(slot);
+    const ok = await waitForPhoto(slot, previous);
+    pendingCaptureRequest = null;
+    if (!ok) {
+      captureStatus.textContent = `Photo ${slot + 1} was not received. Please check the operator camera and live sync, then start again.`;
+      autoSessionActive = false;
+      updateUi();
+      return;
+    }
+    if (slot < 2) await sleep(850);
+  }
+
+  autoSessionActive = false;
+  captureStatus.textContent = 'All 3 photos captured. Review the template, retake a photo, or tap Done.';
+  drawCanvas();
+  updateUi();
 }
 
 function handleCaptureRequest(request) {
@@ -501,10 +581,7 @@ function handleCaptureRequest(request) {
 }
 
 captureBtn.addEventListener('click', async () => {
-  if (currentMode === 'viewer') {
-    await runCountdown();
-    sendCaptureRequest();
-  }
+  if (currentMode === 'viewer') runViewerAutoSession();
 });
 
 document.querySelectorAll('.retake-btn').forEach(btn => btn.addEventListener('click', () => {
@@ -518,7 +595,7 @@ confirmYesBtn.addEventListener('click', () => {
   requestedRetakeIndex = null;
   confirmModal.classList.add('hidden');
   captureBtn.disabled = false;
-  captureStatus.textContent = `Retake Photo ${retakeIndex + 1}. Click Capture Photo when ready.`;
+  captureStatus.textContent = `Retake Photo ${retakeIndex + 1}. Tap Retake Photo to capture again.`;
 });
 
 function showPrintLoading() { printOverlay.classList.remove('hidden'); }
@@ -534,7 +611,7 @@ function saveFinal() {
   link.click();
 }
 saveBtn.addEventListener('click', saveFinal);
-generateQrBtn.addEventListener('click', () => {
+function generateFinalQr() {
   canvas.toBlob(blob => {
     if (!blob) return;
     if (objectUrl) URL.revokeObjectURL(objectUrl);
@@ -545,8 +622,16 @@ generateQrBtn.addEventListener('click', () => {
     else qrCode.textContent = 'QR library did not load. Use the download button below.';
     qrPanel.classList.remove('hidden');
   }, 'image/png');
+}
+generateQrBtn.addEventListener('click', generateFinalQr);
+doneBtn.addEventListener('click', () => {
+  viewerDone = true;
+  generateQrBtn.classList.remove('hidden');
+  captureStatus.textContent = 'Session done. QR is ready for download. Operator may print the final photo.';
+  generateFinalQr();
+  updateUi();
+  broadcastState('viewer-done');
 });
-doneBtn.addEventListener('click', () => { viewerDone = true; generateQrBtn.classList.remove('hidden'); captureStatus.textContent = 'Session done. Generate QR or start over.'; updateUi(); broadcastState('viewer-done'); });
 newSessionBtn.addEventListener('click', resetSession);
 resetTemplateBtn.addEventListener('click', resetTemplate);
 
