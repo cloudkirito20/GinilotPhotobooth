@@ -1,3 +1,7 @@
+
+const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "CONFIGURED_IN_BUILD";
+
 const canvas = document.getElementById('boothCanvas');
 const ctx = canvas.getContext('2d');
 const templateUpload = document.getElementById('templateUpload');
