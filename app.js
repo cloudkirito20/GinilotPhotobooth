@@ -256,12 +256,20 @@ async function runCountdown() {
 }
 function showFlash() { flashOverlay.classList.remove('hidden'); setTimeout(() => flashOverlay.classList.add('hidden'), 340); }
 function captureToTemplate() {
+  const sourceWidth = cameraFeed.videoWidth || 1280;
+  const sourceHeight = cameraFeed.videoHeight || 720;
+  const maxSyncWidth = 720;
+  const scale = Math.min(1, maxSyncWidth / sourceWidth);
   const shotCanvas = document.createElement('canvas');
-  shotCanvas.width = cameraFeed.videoWidth || 1280;
-  shotCanvas.height = cameraFeed.videoHeight || 720;
-  shotCanvas.getContext('2d').drawImage(cameraFeed, 0, 0, shotCanvas.width, shotCanvas.height);
+  shotCanvas.width = Math.round(sourceWidth * scale);
+  shotCanvas.height = Math.round(sourceHeight * scale);
+  const shotCtx = shotCanvas.getContext('2d');
+  shotCtx.imageSmoothingEnabled = true;
+  shotCtx.imageSmoothingQuality = 'high';
+  shotCtx.drawImage(cameraFeed, 0, 0, sourceWidth, sourceHeight, 0, 0, shotCanvas.width, shotCanvas.height);
   const img = new Image();
-  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.78);
+  // Keep the payload small enough for Supabase Realtime broadcast. Large camera frames can silently fail to sync.
+  const dataUrl = shotCanvas.toDataURL('image/jpeg', 0.58);
   img.onload = () => {
     if (retakeIndex !== null) {
       capturedPhotos[retakeIndex] = img;
@@ -360,15 +368,20 @@ async function sendSupabaseState(payload) {
   if (!supabaseChannel) return;
   if (!supabaseReady) { pendingSupabasePayload = payload; return; }
   try {
+    const payloadSizeKb = Math.round(new Blob([JSON.stringify(payload)]).size / 1024);
     const result = await supabaseChannel.send({ type: 'broadcast', event: 'state', payload });
-    if (result !== 'ok') updateLiveStatus(payload, `Supabase send returned: ${result}`);
+    if (result === 'ok') {
+      updateLiveStatus(payload, `Supabase live sync connected. Sent ${payloadSizeKb} KB.`);
+    } else {
+      updateLiveStatus(payload, `Supabase send returned: ${result}. Payload ${payloadSizeKb} KB.`);
+    }
   } catch (error) {
     updateLiveStatus(payload, `Supabase send failed: ${error.message}`);
   }
 }
 
 function applyRemoteState(payload) {
-  if (!payload || payload.clientId === CLIENT_ID || payload.sourceMode === currentMode) return;
+  if (!payload || payload.clientId === CLIENT_ID) return;
   if (payload.paperSize && paperSize.value !== payload.paperSize) paperSize.value = payload.paperSize;
   if (payload.orientation && orientation.value !== payload.orientation) orientation.value = payload.orientation;
   const selected = paperSizes[paperSize.value] || paperSizes['4x6'];
