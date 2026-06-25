@@ -267,3 +267,99 @@ body.viewer-mode .preview-area.viewer-final-only { display: none !important; }
 body.viewer-mode .camera-stage video.hidden { display: none !important; }
 body.viewer-mode .live-preview-image { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
 body.viewer-mode .live-preview-image.hidden { display: none !important; }
+
+/* v26: final preview/review screen. After Photo 3, hide the viewer camera and show only the completed template plus side actions. */
+body.viewer-mode.session-preview-ready .workspace {
+  grid-template-columns: 1fr minmax(220px, 300px) !important;
+  grid-template-areas: "preview actions";
+}
+body.viewer-mode.session-preview-ready .preview-area {
+  grid-area: preview;
+  display: grid !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+body.viewer-mode.session-preview-ready .sidebar {
+  grid-area: actions;
+  display: flex !important;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+}
+body.viewer-mode.session-preview-ready .sidebar .panel-card:has(#cameraFeed) {
+  display: none !important;
+}
+body.viewer-mode.session-preview-ready #finalActionsPanel {
+  display: block !important;
+  margin: 0 !important;
+  max-height: none !important;
+}
+body.viewer-mode.session-preview-ready #finalActionsPanel .retake-grid {
+  display: grid !important;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+body.viewer-mode.session-preview-ready #finalActionsPanel .retake-grid::before {
+  content: 'Retake one photo';
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  margin-bottom: 2px;
+}
+body.viewer-mode.session-preview-ready #finalActionsPanel .retake-btn,
+body.viewer-mode.session-preview-ready #printBtn,
+body.viewer-mode.session-preview-ready #generateQrBtn {
+  display: block !important;
+}
+body.viewer-mode.session-preview-ready #retakeAllBtn,
+body.viewer-mode.session-preview-ready #doneBtn,
+body.viewer-mode.session-preview-ready #saveBtn,
+body.viewer-mode.session-preview-ready #newSessionBtn {
+  display: none !important;
+}
+body.viewer-mode.session-preview-ready #qrPanel {
+  display: block;
+  margin: 0 !important;
+  max-height: none !important;
+}
+body.viewer-mode.session-preview-ready .canvas-wrap {
+  height: 100%;
+  overflow: hidden !important;
+}
+body.viewer-mode.session-preview-ready canvas {
+  height: min(100%, 670px) !important;
+  width: auto !important;
+  max-width: 100%;
+}
+body.viewer-mode.session-generating .camera-stage,
+body.viewer-mode.session-generating .preview-area,
+body.viewer-mode.session-generating #finalActionsPanel,
+body.viewer-mode.session-generating #qrPanel {
+  pointer-events: none;
+  opacity: .35;
+}
+body.operator-mode.session-generating .camera-stage,
+body.operator-mode.session-generating .preview-area,
+body.operator-mode.session-generating #finalActionsPanel,
+body.operator-mode.session-generating #qrPanel {
+  pointer-events: none;
+  opacity: .35;
+}
+
+@media (max-width: 760px), (max-height: 680px) {
+  body.viewer-mode.session-preview-ready .workspace {
+    grid-template-columns: 1fr !important;
+    grid-template-rows: 1fr auto;
+    grid-template-areas: "preview" "actions";
+  }
+  body.viewer-mode.session-preview-ready .sidebar {
+    display: grid !important;
+    grid-template-columns: 1fr;
+  }
+  body.viewer-mode.session-preview-ready #finalActionsPanel .retake-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

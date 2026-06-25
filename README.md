@@ -1,4 +1,4 @@
-# Snap It Up! Browser Photobooth v25
+# Snap It Up! Browser Photobooth v26
 
 Fixes:
 - Keeps the operator camera connected once and gives the viewer a visible output using WebRTC plus a lightweight fallback preview frame.

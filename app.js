@@ -78,6 +78,7 @@ let operatorCaptureBusy = false;
 let viewerSessionStatusLockedUntil = 0;
 let operatorPreviewTimer = null;
 let lastViewerPreviewFrameAt = 0;
+let sessionViewState = 'ready'; // ready | capturing | generating_template | preview_ready | done
 const RTC_CONFIG = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 const SYNC_KEY = 'snap-it-up-live-session';
 const LIVE_ROOM = 'snap-it-up-live-room';
@@ -221,7 +222,8 @@ function cacheCurrentSession() {
       photoSlots,
       paperSize: paperSize.value,
       orientation: orientation.value,
-      viewerDone
+      viewerDone,
+      sessionViewState
     }));
   } catch (_) {}
 }
@@ -252,6 +254,7 @@ function restoreCachedSession() {
     if (cached.paperSize) paperSize.value = cached.paperSize;
     if (cached.orientation) orientation.value = cached.orientation;
     viewerDone = !!cached.viewerDone;
+    if (cached.sessionViewState) sessionViewState = cached.sessionViewState;
   } catch (_) {}
 }
 
@@ -278,7 +281,7 @@ function mergeIncomingPhotos(incoming, reason = '') {
 }
 
 function shouldPreserveViewerCaptureStatus() {
-  return currentMode === 'viewer' && (autoSessionActive || pendingCaptureRequest || Date.now() < viewerSessionStatusLockedUntil);
+  return currentMode === 'viewer' && (autoSessionActive || sessionViewState === 'generating_template' || pendingCaptureRequest || Date.now() < viewerSessionStatusLockedUntil);
 }
 
 function setStatusWhenIdle(message) {
@@ -290,10 +293,14 @@ function updateUi() {
   const count = capturedPhotos.filter(Boolean).length;
   const complete = capturedPhotos.length === 3 && capturedPhotos.every(Boolean);
   const isRetaking = retakeIndex !== null;
+  const isGenerating = sessionViewState === 'generating_template';
+  const isPreviewReady = complete && !isRetaking && !autoSessionActive && !isGenerating;
   const nextNumber = isRetaking ? retakeIndex + 1 : Math.min(count + 1, 3);
+  document.body.classList.toggle('session-generating', isGenerating);
+  document.body.classList.toggle('session-preview-ready', isPreviewReady);
   if (!autoSessionActive && !shouldPreserveViewerCaptureStatus()) {
     captureStatus.textContent = complete && !isRetaking
-      ? (currentMode === 'viewer' ? 'Final template is ready. Tap Retake Photos or Done.' : 'Final template is ready. Choose a photo to retake or print.')
+      ? (currentMode === 'viewer' ? 'Template preview is ready. Choose a photo to retake, generate QR, or print.' : 'Final template is ready. Choose a photo to retake, generate QR, or print.')
       : (currentMode === 'viewer'
         ? 'Tap Start Session. The viewer will capture all 3 photos locally from the live preview.'
         : `Photo ${nextNumber} of 3. Waiting for viewer session.`);
@@ -310,6 +317,17 @@ function updateUi() {
   generateQrBtn.classList.toggle('hidden', !viewerDone && currentMode === 'viewer');
   document.querySelectorAll('.operator-action').forEach(el => el.classList.toggle('hidden', currentMode === 'viewer'));
   document.querySelectorAll('.viewer-action').forEach(el => el.classList.toggle('hidden', currentMode !== 'viewer'));
+  if (currentMode === 'viewer' && complete && !isRetaking) {
+    document.querySelector('#finalActionsPanel .retake-grid')?.classList.remove('hidden');
+    document.querySelectorAll('#finalActionsPanel .retake-btn').forEach(el => el.classList.remove('hidden'));
+    printBtn?.classList.remove('hidden');
+    generateQrBtn?.classList.remove('hidden');
+    retakeAllBtn?.classList.add('hidden');
+    doneBtn?.classList.add('hidden');
+    cameraFeed.closest('.panel-card')?.classList.add('hidden');
+  } else {
+    cameraFeed.closest('.panel-card')?.classList.remove('hidden');
+  }
   document.querySelector('.preview-area').classList.toggle('viewer-final-only', currentMode === 'viewer' && !complete);
   ['step1','step2','step3'].forEach((id, i) => {
     const el = document.getElementById(id);
@@ -326,6 +344,7 @@ function resetSession() {
   photoDataUrls = [];
   retakeIndex = null;
   viewerDone = false;
+  sessionViewState = 'ready';
   autoSessionActive = false;
   autoSessionAbort = true;
   autoSessionToken++;
@@ -662,6 +681,7 @@ function captureToTemplate(slotOverride = null, reason = 'photo-captured') {
     photoDataUrls[slotIndex] = dataUrl;
     retakeIndex = null;
     viewerDone = false;
+    if (sessionViewState !== 'generating_template') sessionViewState = 'capturing';
     pendingCaptureRequest = null;
     qrPanel.classList.add('hidden');
     cacheCurrentSession();
@@ -729,6 +749,7 @@ function captureViewerFrameToTemplate(slotIndex, reason = 'photo-captured-viewer
     photoDataUrls[slotIndex] = dataUrl;
     retakeIndex = null;
     viewerDone = false;
+    if (sessionViewState !== 'generating_template') sessionViewState = 'capturing';
     pendingCaptureRequest = null;
     activeCaptureCommand = null;
     qrPanel.classList.add('hidden');
@@ -747,6 +768,7 @@ function clearViewerPhotosOnly(reason = 'retake-all') {
   photoDataUrls = [];
   retakeIndex = null;
   viewerDone = false;
+  sessionViewState = 'capturing';
   pendingCaptureRequest = null;
   activeCaptureCommand = null;
   qrPanel.classList.add('hidden');
@@ -756,13 +778,15 @@ function clearViewerPhotosOnly(reason = 'retake-all') {
 }
 
 function showSessionLoading(title = 'Preparing your template...', message = 'Please wait while Snap It Up! places your photos into the template.') {
+  sessionViewState = 'generating_template';
+  document.body.classList.add('session-generating');
   const h = printOverlay.querySelector('h2');
   const p = printOverlay.querySelector('p');
   if (h) h.textContent = title;
   if (p) p.textContent = message;
   printOverlay.classList.remove('hidden');
 }
-function hideSessionLoading() { printOverlay.classList.add('hidden'); }
+function hideSessionLoading() { printOverlay.classList.add('hidden'); document.body.classList.remove('session-generating'); }
 
 async function performOperatorCapture(source = 'operator', slotOverride = null) {
   operatorCaptureBusy = true;
@@ -906,6 +930,7 @@ async function runViewerAutoSession() {
   }
 
   autoSessionActive = true;
+  sessionViewState = 'capturing';
   autoSessionAbort = false;
   const myToken = ++autoSessionToken;
   pendingCaptureRequest = null;
@@ -941,16 +966,68 @@ async function runViewerAutoSession() {
     return;
   }
 
-  showSessionLoading('Preparing your preview...', 'Placing your photos into the template and syncing the final preview to the operator.');
+  sessionViewState = 'generating_template';
+  showSessionLoading('Creating template...', 'Placing the captured photos into the template and syncing the preview to the operator.');
+  drawCanvas();
+  cacheCurrentSession();
   broadcastState('final-preview-loading');
   await sleep(1300);
   autoSessionActive = false;
   viewerSessionStatusLockedUntil = 0;
   drawCanvas();
   cacheCurrentSession();
+  sessionViewState = 'preview_ready';
   broadcastState('final-preview-ready');
   hideSessionLoading();
   captureStatus.textContent = 'Preview template is ready. Retake the photos or tap Done.';
+  updateUi();
+}
+
+
+async function runViewerSingleRetake(slot) {
+  if (currentMode !== 'viewer' || !Number.isInteger(slot)) return;
+  if (!templateImage) {
+    captureStatus.textContent = 'Waiting for the operator template before retake.';
+    return;
+  }
+  if (!hasViewerLiveVideo() || !canCaptureFromVisibleVideo()) {
+    announceViewerReady();
+    startViewerReadyLoop();
+    captureStatus.textContent = 'Reconnecting live preview for retake...';
+    const ready = await new Promise(resolve => {
+      const started = Date.now();
+      const timer = setInterval(() => {
+        if (hasViewerLiveVideo() && canCaptureFromVisibleVideo()) { clearInterval(timer); resolve(true); }
+        if (Date.now() - started > 12000) { clearInterval(timer); resolve(false); }
+      }, 250);
+    });
+    if (!ready) {
+      captureStatus.textContent = 'Live operator preview is not ready. Keep the operator camera open, then try retake again.';
+      updateUi();
+      return;
+    }
+  }
+  sessionViewState = 'capturing';
+  viewerDone = false;
+  qrPanel.classList.add('hidden');
+  updateUi();
+  broadcastState('retake-started');
+  await showSessionCue(`Retake Photo ${slot + 1}`, 'Replacing selected photo');
+  await runCountdown(`Retake Photo ${slot + 1}`);
+  const ok = captureViewerFrameToTemplate(slot, 'photo-retaken-viewer-local');
+  if (!ok) return;
+  await sleep(650);
+  sessionViewState = 'generating_template';
+  showSessionLoading('Updating template...', `Replacing Photo ${slot + 1} and syncing the preview to the operator.`);
+  broadcastState('final-preview-loading');
+  await sleep(1000);
+  retakeIndex = null;
+  sessionViewState = 'preview_ready';
+  drawCanvas();
+  cacheCurrentSession();
+  broadcastState('final-preview-ready');
+  hideSessionLoading();
+  captureStatus.textContent = `Photo ${slot + 1} replaced. Template preview is ready.`;
   updateUi();
 }
 
@@ -993,10 +1070,14 @@ document.querySelectorAll('.retake-btn').forEach(btn => btn.addEventListener('cl
   confirmModal.classList.remove('hidden');
 }));
 confirmNoBtn.addEventListener('click', () => { requestedRetakeIndex = null; confirmModal.classList.add('hidden'); });
-confirmYesBtn.addEventListener('click', () => {
+confirmYesBtn.addEventListener('click', async () => {
   retakeIndex = requestedRetakeIndex;
   requestedRetakeIndex = null;
   confirmModal.classList.add('hidden');
+  if (currentMode === 'viewer') {
+    await runViewerSingleRetake(retakeIndex);
+    return;
+  }
   captureBtn.disabled = false;
   captureStatus.textContent = `Retake Photo ${retakeIndex + 1}. Tap Retake Photo to capture again.`;
 });
@@ -1092,7 +1173,7 @@ function serializeState(reason = 'state-updated') {
   return {
     reason,
     activeSessionId,
-    sessionStatus: autoSessionActive ? 'capturing' : (viewerDone ? 'done' : 'ready'),
+    sessionStatus: sessionViewState || (autoSessionActive ? 'capturing' : (viewerDone ? 'done' : 'ready')),
     currentPhoto: getNextCaptureSlotIndex(),
     timestamp: Date.now(),
     sourceMode: currentMode,
@@ -1166,10 +1247,20 @@ function applyRemoteState(payload) {
   if (payload.captureCommand) handleCaptureRequest(payload.captureCommand);
 
   const reason = payload.reason || 'state-updated';
+  if (payload.sessionStatus) sessionViewState = payload.sessionStatus;
+  if (reason === 'final-preview-loading' || payload.sessionStatus === 'generating_template') {
+    sessionViewState = 'generating_template';
+    showSessionLoading('Creating template...', 'The viewer finished capturing. Loading the photos and syncing the final template preview.');
+  }
+  if (reason === 'final-preview-ready' || payload.sessionStatus === 'preview_ready') {
+    sessionViewState = 'preview_ready';
+    hideSessionLoading();
+  }
   if (reason === 'session-reset' || reason === 'template-reset') {
     capturedPhotos = [];
     photoDataUrls = [];
     viewerDone = false;
+    if (sessionViewState !== 'generating_template') sessionViewState = 'capturing';
     pendingCaptureRequest = null;
     activeCaptureCommand = null;
     if (reason === 'template-reset') { templateImage = null; templateDataUrl = null; }
@@ -1190,6 +1281,7 @@ function applyRemoteState(payload) {
   paperBadge.textContent = `${selected.label} • ${isLandscape ? 'Landscape' : 'Portrait'}`;
   if (Array.isArray(payload.photoSlots)) photoSlots = payload.photoSlots;
   if (typeof payload.viewerDone === 'boolean') viewerDone = payload.viewerDone;
+  if (viewerDone) sessionViewState = 'done';
   const imageLoads = [];
   if (payload.templateDataUrl && payload.templateDataUrl !== templateDataUrl) {
     templateDataUrl = payload.templateDataUrl;
