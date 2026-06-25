@@ -2,6 +2,8 @@
 const SUPABASE_URL = "https://srpaeknnmdhafpkgdsih.supabase.co";
 const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_A8DHki148lEPFb_qf6Qebw_pJJz0rH3";
 const PHOTO_STORAGE_BUCKET = "snapitup-photos"; // Create this as a public Supabase Storage bucket for QR downloads.
+const OPERATOR_ADMIN_USERNAME = "admin";
+const OPERATOR_ADMIN_PASSWORD = "SnapItUp2026!"; // Change this before deployment. For production, use Supabase Auth.
 
 const canvas = document.getElementById('boothCanvas');
 const ctx = canvas.getContext('2d');
@@ -40,6 +42,13 @@ const chooseViewerBtn = document.getElementById('chooseViewerBtn');
 const chooseOperatorBtn = document.getElementById('chooseOperatorBtn');
 const doneBtn = document.getElementById('doneBtn');
 const retakeAllBtn = document.getElementById('retakeAllBtn');
+const viewerLoginForm = document.getElementById('viewerLoginForm');
+const operatorLoginForm = document.getElementById('operatorLoginForm');
+const customerNameInput = document.getElementById('customerNameInput');
+const operatorUsernameInput = document.getElementById('operatorUsernameInput');
+const operatorPasswordInput = document.getElementById('operatorPasswordInput');
+const loginError = document.getElementById('loginError');
+const sessionIdentity = document.getElementById('sessionIdentity');
 
 let templateImage = null;
 let capturedPhotos = [];
@@ -105,9 +114,36 @@ let photoSlots = [
 ];
 
 let currentMode = null;
+let currentCustomerName = sessionStorage.getItem('snap-it-up-customer-name') || '';
+let operatorAuthenticated = sessionStorage.getItem('snap-it-up-operator-auth') === 'true';
 let viewerDone = false;
 let activeSessionId = sessionStorage.getItem('snap-it-up-active-session-id') || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random()));
 const SESSION_CACHE_KEY = 'snap-it-up-active-session-cache';
+
+function showLoginError(message) {
+  if (!loginError) return;
+  loginError.textContent = message;
+  loginError.classList.toggle('hidden', !message);
+}
+
+function makeCustomerSessionId(name) {
+  const slug = String(name || 'guest')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48) || 'guest';
+  return `${slug}-${Date.now()}`;
+}
+
+function updateSessionIdentity() {
+  if (!sessionIdentity) return;
+  const label = currentMode === 'viewer'
+    ? `Viewer Session: ${currentCustomerName || 'Guest'}`
+    : `Operator Admin${currentCustomerName ? ` • Current Customer: ${currentCustomerName}` : ''}`;
+  sessionIdentity.textContent = label;
+  sessionIdentity.classList.toggle('hidden', !currentMode);
+}
 
 function setViewMode(mode) {
   currentMode = mode;
@@ -115,15 +151,40 @@ function setViewMode(mode) {
   document.body.classList.toggle('operator-mode', mode === 'operator');
   roleSelect.classList.add('hidden');
   appShell.classList.remove('hidden');
+  updateSessionIdentity();
   updateUi();
 }
-chooseOperatorBtn.addEventListener('click', () => setViewMode('operator'));
-chooseViewerBtn.addEventListener('click', () => {
+
+viewerLoginForm?.addEventListener('submit', event => {
+  event.preventDefault();
+  const name = (customerNameInput?.value || '').trim();
+  if (!name) return showLoginError('Please enter the customer name to start the viewer session.');
+  showLoginError('');
+  currentCustomerName = name;
+  activeSessionId = makeCustomerSessionId(name);
+  try {
+    sessionStorage.setItem('snap-it-up-customer-name', currentCustomerName);
+    sessionStorage.setItem('snap-it-up-active-session-id', activeSessionId);
+  } catch (_) {}
   setViewMode('viewer');
-  captureStatus.textContent = 'Connecting to operator camera...';
+  captureStatus.textContent = `Viewer ready for ${currentCustomerName}. Connecting to operator camera...`;
   cameraFeed.classList.remove('hidden');
   livePreviewImage?.classList.add('hidden');
   startViewerReadyLoop();
+  broadcastState('viewer-login');
+});
+
+operatorLoginForm?.addEventListener('submit', event => {
+  event.preventDefault();
+  const username = (operatorUsernameInput?.value || '').trim();
+  const password = operatorPasswordInput?.value || '';
+  if (username !== OPERATOR_ADMIN_USERNAME || password !== OPERATOR_ADMIN_PASSWORD) {
+    return showLoginError('Invalid operator admin login.');
+  }
+  showLoginError('');
+  operatorAuthenticated = true;
+  try { sessionStorage.setItem('snap-it-up-operator-auth', 'true'); } catch (_) {}
+  setViewMode('operator');
 });
 
 function setPaper() {
@@ -245,7 +306,8 @@ function cacheCurrentSession() {
       paperSize: paperSize.value,
       orientation: orientation.value,
       viewerDone,
-      sessionViewState
+      sessionViewState,
+      currentCustomerName
     }));
   } catch (_) {}
 }
@@ -283,6 +345,7 @@ function restoreCachedSession() {
     if (cached.orientation) orientation.value = cached.orientation;
     viewerDone = !!cached.viewerDone;
     if (cached.sessionViewState) sessionViewState = cached.sessionViewState;
+    if (cached.currentCustomerName) currentCustomerName = cached.currentCustomerName;
   } catch (_) {}
 }
 
@@ -1155,7 +1218,8 @@ window.matchMedia('print').addEventListener?.('change', event => { if (!event.ma
 
 function saveFinal() {
   const link = document.createElement('a');
-  link.download = `snap-it-up-session-${Date.now()}.png`;
+  const customerSlug = String(currentCustomerName || 'guest').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'guest';
+  link.download = `snap-it-up-${customerSlug}-${Date.now()}.png`;
   link.href = canvas.toDataURL('image/png');
   link.click();
 }
@@ -1180,7 +1244,8 @@ function makeQr(text) {
 
 async function uploadFinalPhotoForQr(blob) {
   if (!isSupabaseConfigured() || !supabaseClient?.storage) return null;
-  const fileName = `sessions/snap-it-up-${Date.now()}-${CLIENT_ID}.png`;
+  const customerSlug = String(currentCustomerName || 'guest').trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'guest';
+  const fileName = `sessions/${customerSlug}/snap-it-up-${Date.now()}-${CLIENT_ID}.png`;
   const { error } = await supabaseClient.storage
     .from(PHOTO_STORAGE_BUCKET)
     .upload(fileName, blob, { contentType: 'image/png', upsert: true });
@@ -1235,6 +1300,9 @@ operatorResetViewerBtn?.addEventListener('click', () => {
   const ok = window.confirm('Reset the viewer session? This clears captured photos, QR, and the final preview, but keeps the camera connection alive.');
   if (!ok) return;
   activeSessionId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
+  currentCustomerName = '';
+  try { sessionStorage.removeItem('snap-it-up-customer-name'); } catch (_) {}
+  updateSessionIdentity();
   capturedPhotos = [];
   photoDataUrls = [];
   finalPreviewDataUrl = null;
@@ -1259,6 +1327,7 @@ function serializeState(reason = 'state-updated') {
   return {
     reason,
     activeSessionId,
+    customerName: currentCustomerName,
     sessionStatus: sessionViewState || (autoSessionActive ? 'capturing' : (viewerDone ? 'done' : 'ready')),
     currentPhoto: getNextCaptureSlotIndex(),
     timestamp: Date.now(),
@@ -1359,8 +1428,16 @@ function applyRemoteState(payload) {
     hideSessionLoading?.();
     if (reason === 'template-reset') { templateImage = null; templateDataUrl = null; }
     captureStatus.textContent = currentMode === 'viewer'
-      ? 'Session reset by operator. Tap Start Session when ready.'
+      ? 'Session reset by operator. Please enter the next customer name.'
       : 'Viewer session reset. Camera connection remains ready.';
+    if (reason === 'operator-reset-viewer' && currentMode === 'viewer') {
+      currentMode = null;
+      document.body.classList.remove('viewer-mode', 'operator-mode', 'session-preview-ready', 'session-generating');
+      appShell.classList.add('hidden');
+      roleSelect.classList.remove('hidden');
+      customerNameInput && (customerNameInput.value = '');
+      updateSessionIdentity();
+    }
   }
 
   if (pendingCaptureRequest && (reason === 'photo-captured' || reason === 'photo-captured-viewer-fallback')) {
@@ -1369,6 +1446,14 @@ function applyRemoteState(payload) {
     captureStatus.textContent = 'Photo received. Continuing the same session.';
   }
   if (payload.activeSessionId) activeSessionId = payload.activeSessionId;
+  if (Object.prototype.hasOwnProperty.call(payload, 'customerName')) {
+    currentCustomerName = payload.customerName || '';
+    try {
+      if (currentCustomerName) sessionStorage.setItem('snap-it-up-customer-name', currentCustomerName);
+      else sessionStorage.removeItem('snap-it-up-customer-name');
+    } catch (_) {}
+    updateSessionIdentity();
+  }
   if (payload.paperSize && paperSize.value !== payload.paperSize) paperSize.value = payload.paperSize;
   if (payload.orientation && orientation.value !== payload.orientation) orientation.value = payload.orientation;
   const selected = paperSizes[paperSize.value] || paperSizes['4x6'];
@@ -1413,7 +1498,8 @@ function updateLiveStatus(payload, syncMessage) {
   if (status) {
     const syncLabel = supabaseReady ? 'Supabase live sync connected' : (lastSyncError || (isSupabaseConfigured() ? 'Connecting to Supabase live sync...' : 'Local tab sync only - add anon key in app.js'));
     const reason = payload?.reason ? `Live update: ${payload.reason.replaceAll('-', ' ')}` : 'Live sync ready.';
-    status.textContent = `${reason} • ${syncLabel}`;
+    const customerLabel = (payload?.customerName || currentCustomerName) ? ` • Customer: ${payload?.customerName || currentCustomerName}` : '';
+    status.textContent = `${reason}${customerLabel} • ${syncLabel}`;
   }
   if (photoStatus) {
     const list = (payload?.photoDataUrls || photoDataUrls).map((src, i) => `Photo ${i + 1}: ${src ? 'received' : 'waiting'}`);

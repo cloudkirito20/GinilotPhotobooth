@@ -32,3 +32,14 @@ Fixes:
 - Clears the viewer's captured photos, final preview, QR panel, countdown/session state, and retake state.
 - Keeps the live camera/WebRTC connection alive so the next session can start without reconnecting.
 - Remote reset now returns the viewer to the ready/start state instead of a capture/waiting state.
+
+
+## v31 Login and Session Management
+
+This build adds a login/session entry screen:
+
+- Viewer: customer name only. The customer name is attached to the active session and used in QR/storage filenames.
+- Operator: admin-only login. Default credentials are configured in `app.js` as `OPERATOR_ADMIN_USERNAME` and `OPERATOR_ADMIN_PASSWORD`; change these before deployment.
+- Operator Reset Viewer Session clears the current customer session and returns the viewer to the customer-name screen for the next guest.
+
+For production deployments, replace the simple client-side operator password with Supabase Auth or another server-side authentication method.
