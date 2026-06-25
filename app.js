@@ -74,6 +74,8 @@ let liveOfferInProgress = false;
 let lastLiveOfferAt = 0;
 let lastOperatorOfferFrom = null;
 let lastViewerOfferAt = 0;
+let lastViewerReadySentAt = 0;
+let lastViewerReconnectRequestAt = 0;
 let operatorCaptureBusy = false;
 let viewerSessionStatusLockedUntil = 0;
 let operatorPreviewTimer = null;
@@ -398,13 +400,13 @@ function sendLiveSignal(eventName, payload = {}) {
   }
 }
 
-function closePeerConnection() {
+function closePeerConnection({ clearViewerVideo = true } = {}) {
   if (peerConnection) {
     try { peerConnection.ontrack = null; peerConnection.onicecandidate = null; peerConnection.close(); } catch (_) {}
   }
   peerConnection = null;
   pendingIceCandidates = [];
-  if (currentMode === 'viewer') remoteStream = null;
+  if (currentMode === 'viewer' && clearViewerVideo) remoteStream = null;
 }
 
 function createPeerConnection(role) {
@@ -418,7 +420,9 @@ function createPeerConnection(role) {
   peerConnection.onconnectionstatechange = () => {
     const state = peerConnection?.connectionState || '';
     if (currentMode === 'viewer' && ['failed', 'closed'].includes(state)) {
-      requestViewerLiveReconnect('Live preview reconnecting. Capture session will continue using operator sync...');
+      // Do not immediately blank the video. On tablets, transient WebRTC state changes
+      // can fire during negotiation and make the viewer look connected/disconnected.
+      requestViewerLiveReconnect('Live preview reconnecting. The session will stay open...');
     }
     if (currentMode === 'viewer') {
       setStatusWhenIdle(state === 'connected' ? 'Live operator camera connected. Tap Start Session when ready.' : `Operator camera connection: ${state || 'starting'}...`);
@@ -448,25 +452,33 @@ function hasViewerLiveVideo() {
   return currentMode === 'viewer'
     && !!remoteStream
     && cameraFeed.srcObject === remoteStream
-    && cameraFeed.readyState >= 1;
+    && cameraFeed.readyState >= 2
+    && cameraFeed.videoWidth > 0
+    && cameraFeed.videoHeight > 0;
 }
 
 function requestViewerLiveReconnect(message = 'Connecting to operator camera...') {
   if (currentMode !== 'viewer') return;
+  const now = Date.now();
+  if (now - lastViewerReconnectRequestAt < 5000) return;
+  lastViewerReconnectRequestAt = now;
   captureStatus.textContent = message;
-  announceViewerReady();
+  announceViewerReady(true);
   startViewerReadyLoop();
   updateUi();
 }
 
-function announceViewerReady() {
+function announceViewerReady(force = false) {
   if (currentMode !== 'viewer') return;
-  sendLiveSignal('viewer-ready', { wantsLivePreview: true, hasLiveVideo: hasViewerLiveVideo() });
+  const now = Date.now();
+  if (!force && now - lastViewerReadySentAt < 2500) return;
+  lastViewerReadySentAt = now;
+  sendLiveSignal('viewer-ready', { wantsLivePreview: true, hasLiveVideo: hasViewerLiveVideo(), connectionState: peerConnection?.connectionState || 'none' });
 }
 
 function startViewerReadyLoop() {
   if (viewerReadyTimer) clearInterval(viewerReadyTimer);
-  announceViewerReady();
+  announceViewerReady(true);
   viewerReadyTimer = setInterval(() => {
     if (currentMode !== 'viewer') {
       clearInterval(viewerReadyTimer);
@@ -478,7 +490,7 @@ function startViewerReadyLoop() {
     if (state === 'connected' && hasLiveVideo) return;
     setStatusWhenIdle('Connecting to operator camera...');
     announceViewerReady();
-  }, 2000);
+  }, 3000);
 }
 
 function announceOperatorCameraReady(force = false) {
@@ -517,22 +529,24 @@ async function maybeStartOperatorLiveStream(force = false) {
   if (currentMode !== 'operator' || !stream || !cameraReady || !viewerClientId) return;
   const state = peerConnection?.connectionState;
   const iceState = peerConnection?.iceConnectionState;
+  const now = Date.now();
 
-  // Keep one stable WebRTC connection per viewer. The viewer sends repeated
-  // "viewer-ready" pings while it is waiting for video; the old logic created
-  // a brand-new offer every few seconds, which closed the current peer connection
-  // in createPeerConnection(). During the auto session this could reset the live
-  // connection after Photo 1 and stop the remaining captures from continuing.
+  // Stable preview rule: never rebuild the peer connection on every viewer-ready ping.
+  // Tablets may report no visible frame for a few seconds while the same offer is still
+  // connecting. Recreating the offer at that point causes the viewer camera to flicker
+  // between connected and disconnected.
   if (operatorCaptureBusy && !force) return;
-  if (!force && liveOfferInProgress) return;
-  if (!force && peerConnection && ['new', 'connecting', 'connected'].includes(state)) return;
-  if (!force && peerConnection && ['checking', 'connected', 'completed'].includes(iceState)) return;
+  if (liveOfferInProgress && now - lastLiveOfferAt < 12000) return;
+  if (peerConnection && ['new', 'connecting', 'connected'].includes(state)) return;
+  if (peerConnection && ['checking', 'connected', 'completed'].includes(iceState)) return;
+  if (peerConnection && state === 'disconnected' && now - lastLiveOfferAt < 15000) return;
 
-  // If the previous connection is genuinely broken, replace it.
-  if (peerConnection && ['failed', 'closed', 'disconnected'].includes(state)) closePeerConnection();
+  // If the previous connection is genuinely broken, replace it. A short-lived
+  // disconnected state is allowed to recover naturally to prevent viewer flicker.
+  if (peerConnection && ['failed', 'closed'].includes(state)) closePeerConnection();
 
   liveOfferInProgress = true;
-  lastLiveOfferAt = Date.now();
+  lastLiveOfferAt = now;
   try {
     const pc = createPeerConnection('operator');
     stream.getTracks().forEach(track => pc.addTrack(track, stream));
@@ -571,7 +585,10 @@ async function handleLiveSignal(eventName, payload) {
     // During an actual capture, do not restart WebRTC. Outside capture, force a new offer if
     // the viewer says it still has no visible video; otherwise a stale connected peer can leave
     // the viewer with "operator ready" but no camera output.
-    if (!operatorCaptureBusy) maybeStartOperatorLiveStream(isNewViewer || payload.hasLiveVideo === false);
+    if (!operatorCaptureBusy) {
+      const needsOffer = isNewViewer || !peerConnection || ['failed', 'closed'].includes(peerConnection.connectionState);
+      maybeStartOperatorLiveStream(needsOffer);
+    }
     return;
   }
 
@@ -598,11 +615,15 @@ async function handleLiveSignal(eventName, payload) {
   if (eventName === 'webrtc-offer') {
     if (currentMode !== 'viewer' || !payload.description) return;
     const existingState = peerConnection?.connectionState;
+    const now = Date.now();
     const offerKey = `${payload.clientId || 'operator'}-${payload.timestamp || 0}`;
+    if (lastOperatorOfferFrom === offerKey && now - lastViewerOfferAt < 8000) return;
+    // Keep the current visible stream while a connection is still starting/healthy.
+    // Accepting every duplicate offer closes the video element and creates flicker.
+    if (peerConnection && ['new', 'connecting', 'connected'].includes(existingState) && now - lastViewerOfferAt < 15000) return;
     if ((autoSessionActive || pendingCaptureRequest) && peerConnection && ['new', 'connecting', 'connected'].includes(existingState)) return;
-    if (lastOperatorOfferFrom === offerKey && Date.now() - lastViewerOfferAt < 5000) return;
     lastOperatorOfferFrom = offerKey;
-    lastViewerOfferAt = Date.now();
+    lastViewerOfferAt = now;
     try {
       const pc = createPeerConnection('viewer');
       await pc.setRemoteDescription(new RTCSessionDescription(payload.description));
