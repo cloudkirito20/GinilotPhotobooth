@@ -24,3 +24,11 @@ Fixes:
 - Viewer capture screen is centered in the modal.
 - Live preview is on the left and viewer controls/status are on the right.
 - Pre-session viewer screen hides the template area until the capture session is complete.
+
+
+## v30 - Operator Reset Viewer Session
+
+- Added an Operator-only **Reset Viewer Session** button.
+- Clears the viewer's captured photos, final preview, QR panel, countdown/session state, and retake state.
+- Keeps the live camera/WebRTC connection alive so the next session can start without reconnecting.
+- Remote reset now returns the viewer to the ready/start state instead of a capture/waiting state.

@@ -15,6 +15,7 @@ const saveBtn = document.getElementById('saveBtn');
 const generateQrBtn = document.getElementById('generateQrBtn');
 const newSessionBtn = document.getElementById('newSessionBtn');
 const resetTemplateBtn = document.getElementById('resetTemplateBtn');
+const operatorResetViewerBtn = document.getElementById('operatorResetViewerBtn');
 const paperSize = document.getElementById('paperSize');
 const orientation = document.getElementById('orientation');
 const paperBadge = document.getElementById('paperBadge');
@@ -1230,6 +1231,27 @@ doneBtn.addEventListener('click', () => {
 });
 newSessionBtn.addEventListener('click', resetSession);
 resetTemplateBtn.addEventListener('click', resetTemplate);
+operatorResetViewerBtn?.addEventListener('click', () => {
+  const ok = window.confirm('Reset the viewer session? This clears captured photos, QR, and the final preview, but keeps the camera connection alive.');
+  if (!ok) return;
+  activeSessionId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now() + Math.random());
+  capturedPhotos = [];
+  photoDataUrls = [];
+  finalPreviewDataUrl = null;
+  finalPreviewImage = null;
+  retakeIndex = null;
+  viewerDone = false;
+  sessionViewState = 'ready';
+  autoSessionActive = false;
+  autoSessionAbort = true;
+  pendingCaptureRequest = null;
+  activeCaptureCommand = null;
+  qrPanel.classList.add('hidden');
+  drawCanvas();
+  updateUi();
+  captureStatus.textContent = 'Viewer session reset. Camera connection remains ready.';
+  broadcastState('operator-reset-viewer');
+});
 
 
 
@@ -1321,14 +1343,24 @@ function applyRemoteState(payload) {
     sessionViewState = 'preview_ready';
     hideSessionLoading();
   }
-  if (reason === 'session-reset' || reason === 'template-reset') {
+  if (reason === 'session-reset' || reason === 'template-reset' || reason === 'operator-reset-viewer') {
     capturedPhotos = [];
     photoDataUrls = [];
+    finalPreviewDataUrl = null;
+    finalPreviewImage = null;
     viewerDone = false;
-    if (sessionViewState !== 'generating_template') sessionViewState = 'capturing';
+    sessionViewState = 'ready';
+    autoSessionActive = false;
+    autoSessionAbort = true;
     pendingCaptureRequest = null;
     activeCaptureCommand = null;
+    retakeIndex = null;
+    qrPanel?.classList.add('hidden');
+    hideSessionLoading?.();
     if (reason === 'template-reset') { templateImage = null; templateDataUrl = null; }
+    captureStatus.textContent = currentMode === 'viewer'
+      ? 'Session reset by operator. Tap Start Session when ready.'
+      : 'Viewer session reset. Camera connection remains ready.';
   }
 
   if (pendingCaptureRequest && (reason === 'photo-captured' || reason === 'photo-captured-viewer-fallback')) {
