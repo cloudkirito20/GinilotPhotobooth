@@ -1,12 +1,14 @@
-# SnapItUp Browser WebRTC v31 Reset Stale Preview Fix
+# Snap It Up! Browser WebRTC v31 - No Login Build
 
-This version fixes the operator Reset Viewer Session flow so the viewer clears the previous template preview, captured photos, QR state, loading state, and cached session values. The reset creates a fresh session ID while keeping the camera connection available for the next customer.
+Built from the uploaded v30 ship package.
 
-## Main fixes
+Updates:
+- Login/sign-in screen removed.
+- App opens directly to the Viewer / Operator role selection screen.
+- Operator and Viewer workflow remains unchanged from the uploaded build.
+- Operator can still reset the viewer session.
+- Camera/WebRTC behavior is preserved.
 
-- Operator Reset Viewer Session now sends a full reset state.
-- Viewer clears the last session preview and photo cache.
-- Viewer returns to the start/login state for the next customer.
-- QR and final preview data are removed on reset.
-- Reset creates a new active session ID to avoid stale data carrying over.
-- Camera/WebRTC connection can remain available without preserving old photos.
+Notes:
+- This build does not require username, password, or authentication before using the photobooth.
+- Supabase configuration is still used only for realtime/photo sync and storage if configured in `app.js`.
