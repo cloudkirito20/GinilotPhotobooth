@@ -1,45 +1,12 @@
-# Snap It Up! Browser Photobooth v26
+# SnapItUp Browser WebRTC v31 Reset Stale Preview Fix
 
-Fixes:
-- Keeps the operator camera connected once and gives the viewer a visible output using WebRTC plus a lightweight fallback preview frame.
-- Viewer can capture locally from the live video or fallback preview, so a tablet with blocked WebRTC video still continues the session.
-- Template preview is hidden on the viewer until the 3-photo session finishes.
-- Viewer remains in one no-scroll modal/kiosk screen.
+This version fixes the operator Reset Viewer Session flow so the viewer clears the previous template preview, captured photos, QR state, loading state, and cached session values. The reset creates a fresh session ID while keeping the camera connection available for the next customer.
 
+## Main fixes
 
-## v27 Viewer Camera Flicker Fix
-- Prevents the operator from rebuilding the WebRTC offer on every viewer-ready ping.
-- Keeps the current viewer video visible while WebRTC is connecting/recovering.
-- Debounces viewer reconnect requests to avoid connected/not connected flicker on tablets.
-- Uses the image preview fallback without clearing the active video stream.
-
-## v29 Operator Final Preview Photo Sync Fix
-- Sends one flattened final template preview from the viewer after Photo 3.
-- Operator renders the flattened final preview directly during review/done state.
-- Prevents blank operator template slots when individual captured photo data URLs arrive late or are dropped on separate tablet/mobile devices.
-- Retake regenerates and resyncs the flattened final preview.
-
-
-## v29 update
-- Viewer capture screen is centered in the modal.
-- Live preview is on the left and viewer controls/status are on the right.
-- Pre-session viewer screen hides the template area until the capture session is complete.
-
-
-## v30 - Operator Reset Viewer Session
-
-- Added an Operator-only **Reset Viewer Session** button.
-- Clears the viewer's captured photos, final preview, QR panel, countdown/session state, and retake state.
-- Keeps the live camera/WebRTC connection alive so the next session can start without reconnecting.
-- Remote reset now returns the viewer to the ready/start state instead of a capture/waiting state.
-
-
-## v31 Login and Session Management
-
-This build adds a login/session entry screen:
-
-- Viewer: customer name only. The customer name is attached to the active session and used in QR/storage filenames.
-- Operator: admin-only login. Default credentials are configured in `app.js` as `OPERATOR_ADMIN_USERNAME` and `OPERATOR_ADMIN_PASSWORD`; change these before deployment.
-- Operator Reset Viewer Session clears the current customer session and returns the viewer to the customer-name screen for the next guest.
-
-For production deployments, replace the simple client-side operator password with Supabase Auth or another server-side authentication method.
+- Operator Reset Viewer Session now sends a full reset state.
+- Viewer clears the last session preview and photo cache.
+- Viewer returns to the start/login state for the next customer.
+- QR and final preview data are removed on reset.
+- Reset creates a new active session ID to avoid stale data carrying over.
+- Camera/WebRTC connection can remain available without preserving old photos.
