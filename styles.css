@@ -363,3 +363,98 @@ body.operator-mode.session-generating #qrPanel {
     grid-template-columns: repeat(3, 1fr);
   }
 }
+
+/* v29: Viewer capture layout - centered modal, live preview left, controls right */
+body.viewer-mode:not(.session-preview-ready) .workspace {
+  width: min(1040px, calc(100vw - 28px)) !important;
+  height: min(540px, calc(100vh - 28px)) !important;
+  grid-template-columns: 1fr !important;
+  place-items: center !important;
+  padding: 18px !important;
+}
+
+body.viewer-mode:not(.session-preview-ready) .sidebar {
+  width: min(920px, 100%) !important;
+  height: auto !important;
+  display: grid !important;
+  place-items: center !important;
+  grid-template-columns: 1fr !important;
+  grid-template-rows: auto !important;
+}
+
+body.viewer-mode:not(.session-preview-ready) .sidebar .panel-card:has(#cameraFeed) {
+  width: min(900px, 100%) !important;
+  min-height: 330px !important;
+  display: grid !important;
+  grid-template-columns: minmax(360px, 1.35fr) minmax(220px, .65fr) !important;
+  grid-template-rows: auto 1fr auto !important;
+  grid-template-areas:
+    "title title"
+    "preview controls"
+    "preview status" !important;
+  gap: 16px 18px !important;
+  align-items: center !important;
+  padding: 22px !important;
+  margin: 0 auto !important;
+}
+
+body.viewer-mode:not(.session-preview-ready) .sidebar .panel-card:has(#cameraFeed) h2 {
+  grid-area: title !important;
+  margin: 0 !important;
+}
+
+body.viewer-mode:not(.session-preview-ready) .sidebar .panel-card:has(#cameraFeed) .camera-stage {
+  grid-area: preview !important;
+  width: 100% !important;
+  aspect-ratio: 4 / 3 !important;
+  max-height: none !important;
+  border-radius: 24px !important;
+}
+
+body.viewer-mode:not(.session-preview-ready) .sidebar .panel-card:has(#cameraFeed) .button-row {
+  grid-area: controls !important;
+  align-self: end !important;
+  display: grid !important;
+  grid-template-columns: 1fr !important;
+  gap: 12px !important;
+  margin-top: 0 !important;
+}
+
+body.viewer-mode:not(.session-preview-ready) .sidebar .panel-card:has(#cameraFeed) #captureStatus {
+  grid-area: status !important;
+  align-self: start !important;
+  margin: 0 !important;
+  padding: 14px 16px !important;
+  min-height: 74px !important;
+  border-radius: 18px !important;
+  border: 1px solid rgba(255,255,255,.12) !important;
+  background: rgba(15,23,42,.45) !important;
+}
+
+body.viewer-mode:not(.session-preview-ready) .preview-area.viewer-final-only,
+body.viewer-mode:not(.session-preview-ready) .preview-area:not(.viewer-final-only),
+body.viewer-mode:not(.session-preview-ready) #finalActionsPanel,
+body.viewer-mode:not(.session-preview-ready) #qrPanel {
+  display: none !important;
+}
+
+@media (max-width: 760px), (max-height: 620px) {
+  body.viewer-mode:not(.session-preview-ready) .workspace {
+    height: calc(100vh - 16px) !important;
+    width: calc(100vw - 16px) !important;
+    padding: 10px !important;
+  }
+  body.viewer-mode:not(.session-preview-ready) .sidebar .panel-card:has(#cameraFeed) {
+    grid-template-columns: 1fr !important;
+    grid-template-areas:
+      "title"
+      "preview"
+      "controls"
+      "status" !important;
+    min-height: 0 !important;
+    padding: 14px !important;
+  }
+  body.viewer-mode:not(.session-preview-ready) .sidebar .panel-card:has(#cameraFeed) .camera-stage {
+    max-height: 52vh !important;
+  }
+}

@@ -50,6 +50,8 @@ let requestedRetakeIndex = null;
 let objectUrl = null;
 let cameraReady = false;
 let templateDataUrl = null;
+let finalPreviewDataUrl = null;
+let finalPreviewImage = null;
 let photoDataUrls = [];
 let syncChannel = null;
 let supabaseClient = null;
@@ -153,6 +155,22 @@ function drawCanvas() {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = '#ffffff';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Operator final review fix:
+  // On separate devices, large individual photo data URLs can arrive late or be dropped by
+  // realtime transport limits. The viewer now sends one flattened final preview image after
+  // Photo 3. In operator preview/done state, render that flattened image directly so the
+  // operator always sees the completed template with captured photos.
+  const canUseFlattenedPreview = currentMode === 'operator'
+    && finalPreviewImage
+    && (sessionViewState === 'preview_ready' || sessionViewState === 'done');
+  if (canUseFlattenedPreview) {
+    drawCoverImage(finalPreviewImage, 0, 0, canvas.width, canvas.height);
+    emptyState.classList.add('hidden');
+    updateUi();
+    return;
+  }
+
   if (templateImage) { drawCoverImage(templateImage, 0, 0, canvas.width, canvas.height); emptyState.classList.add('hidden'); }
   else { emptyState.classList.remove('hidden'); }
   getPhotoSlots().forEach((slot, index) => {
@@ -220,6 +238,7 @@ function cacheCurrentSession() {
     sessionStorage.setItem(SESSION_CACHE_KEY, JSON.stringify({
       activeSessionId,
       templateDataUrl,
+      finalPreviewDataUrl,
       photoDataUrls: photoDataUrls.slice(0, 3),
       photoSlots,
       paperSize: paperSize.value,
@@ -235,6 +254,12 @@ function restoreCachedSession() {
     const cached = JSON.parse(sessionStorage.getItem(SESSION_CACHE_KEY) || 'null');
     if (!cached) return;
     if (cached.activeSessionId) activeSessionId = cached.activeSessionId;
+    if (cached.finalPreviewDataUrl && !finalPreviewDataUrl) {
+      finalPreviewDataUrl = cached.finalPreviewDataUrl;
+      finalPreviewImage = new Image();
+      finalPreviewImage.onload = drawCanvas;
+      finalPreviewImage.src = finalPreviewDataUrl;
+    }
     if (cached.templateDataUrl && !templateDataUrl) {
       templateDataUrl = cached.templateDataUrl;
       templateImage = new Image();
@@ -344,6 +369,8 @@ function resetSession() {
   try { sessionStorage.removeItem(SESSION_CACHE_KEY); sessionStorage.setItem('snap-it-up-active-session-id', activeSessionId); } catch (_) {}
   capturedPhotos = [];
   photoDataUrls = [];
+  finalPreviewDataUrl = null;
+  finalPreviewImage = null;
   retakeIndex = null;
   viewerDone = false;
   sessionViewState = 'ready';
@@ -700,6 +727,8 @@ function captureToTemplate(slotOverride = null, reason = 'photo-captured') {
       : (retakeIndex !== null ? retakeIndex : getNextCaptureSlotIndex());
     capturedPhotos[slotIndex] = img;
     photoDataUrls[slotIndex] = dataUrl;
+    finalPreviewDataUrl = null;
+    finalPreviewImage = null;
     retakeIndex = null;
     viewerDone = false;
     if (sessionViewState !== 'generating_template') sessionViewState = 'capturing';
@@ -768,6 +797,8 @@ function captureViewerFrameToTemplate(slotIndex, reason = 'photo-captured-viewer
   img.onload = () => {
     capturedPhotos[slotIndex] = img;
     photoDataUrls[slotIndex] = dataUrl;
+    finalPreviewDataUrl = null;
+    finalPreviewImage = null;
     retakeIndex = null;
     viewerDone = false;
     if (sessionViewState !== 'generating_template') sessionViewState = 'capturing';
@@ -787,6 +818,8 @@ function captureViewerFrameToTemplate(slotIndex, reason = 'photo-captured-viewer
 function clearViewerPhotosOnly(reason = 'retake-all') {
   capturedPhotos = [];
   photoDataUrls = [];
+  finalPreviewDataUrl = null;
+  finalPreviewImage = null;
   retakeIndex = null;
   viewerDone = false;
   sessionViewState = 'capturing';
@@ -996,6 +1029,12 @@ async function runViewerAutoSession() {
   autoSessionActive = false;
   viewerSessionStatusLockedUntil = 0;
   drawCanvas();
+  // Send one flattened final template image to the operator. This avoids blank operator
+  // previews when individual photo data URLs do not arrive in order on tablet/mobile.
+  finalPreviewDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+  finalPreviewImage = new Image();
+  finalPreviewImage.onload = drawCanvas;
+  finalPreviewImage.src = finalPreviewDataUrl;
   cacheCurrentSession();
   sessionViewState = 'preview_ready';
   broadcastState('final-preview-ready');
@@ -1045,6 +1084,10 @@ async function runViewerSingleRetake(slot) {
   retakeIndex = null;
   sessionViewState = 'preview_ready';
   drawCanvas();
+  finalPreviewDataUrl = canvas.toDataURL('image/jpeg', 0.82);
+  finalPreviewImage = new Image();
+  finalPreviewImage.onload = drawCanvas;
+  finalPreviewImage.src = finalPreviewDataUrl;
   cacheCurrentSession();
   broadcastState('final-preview-ready');
   hideSessionLoading();
@@ -1200,6 +1243,7 @@ function serializeState(reason = 'state-updated') {
     sourceMode: currentMode,
     clientId: CLIENT_ID,
     templateDataUrl,
+    finalPreviewDataUrl,
     photoDataUrls: photoDataUrls.slice(0, 3),
     photoSlots,
     paperSize: paperSize.value,
@@ -1308,6 +1352,11 @@ function applyRemoteState(payload) {
     templateDataUrl = payload.templateDataUrl;
     templateImage = new Image();
     imageLoads.push(new Promise(resolve => { templateImage.onload = resolve; templateImage.onerror = resolve; templateImage.src = templateDataUrl; }));
+  }
+  if (payload.finalPreviewDataUrl && payload.finalPreviewDataUrl !== finalPreviewDataUrl) {
+    finalPreviewDataUrl = payload.finalPreviewDataUrl;
+    finalPreviewImage = new Image();
+    imageLoads.push(new Promise(resolve => { finalPreviewImage.onload = resolve; finalPreviewImage.onerror = resolve; finalPreviewImage.src = finalPreviewDataUrl; }));
   }
   if (Array.isArray(payload.photoDataUrls)) {
     mergeIncomingPhotos(payload.photoDataUrls, reason);

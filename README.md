@@ -12,3 +12,15 @@ Fixes:
 - Keeps the current viewer video visible while WebRTC is connecting/recovering.
 - Debounces viewer reconnect requests to avoid connected/not connected flicker on tablets.
 - Uses the image preview fallback without clearing the active video stream.
+
+## v29 Operator Final Preview Photo Sync Fix
+- Sends one flattened final template preview from the viewer after Photo 3.
+- Operator renders the flattened final preview directly during review/done state.
+- Prevents blank operator template slots when individual captured photo data URLs arrive late or are dropped on separate tablet/mobile devices.
+- Retake regenerates and resyncs the flattened final preview.
+
+
+## v29 update
+- Viewer capture screen is centered in the modal.
+- Live preview is on the left and viewer controls/status are on the right.
+- Pre-session viewer screen hides the template area until the capture session is complete.
